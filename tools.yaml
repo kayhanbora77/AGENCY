@@ -1,0 +1,22 @@
+tools:
+  - name: query
+    description: Run a read-only SQL query on DuckDB
+    input_schema:
+      type: object
+      properties:
+        sql:
+          type: string
+      required: [sql]
+
+  - name: execute
+    description: Run a SQL command on DuckDB
+    input_schema:
+      type: object
+      properties:
+        sql:
+          type: string
+      required: [sql]
+
+database:
+  type: duckdb
+  path: /home/kayhan/snap/duckdb/my_db.duckdb

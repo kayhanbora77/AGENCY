@@ -15,7 +15,8 @@ DB_PATH = DATABASE_DIR / DATABASE_NAME
 SOURCE_TABLE = "BLUESTAR"
 TARGET_TABLE = "BLUESTAR_TARGET"
 
-FLTNO_REGEX = r"^([A-Z]{2,3})0+([1-9][0-9]*)$"
+FLTNO_REGEX = r"^([A-Z]{2,3}|\d[A-Z])0+([1-9][0-9]*)$"
+
 MAX_FLTNO_DIGITS = 10
 
 BATCH_SIZE = 100_000
@@ -110,57 +111,26 @@ def create_clean_view(con):
             AirlineName,
             TicketNo,
             
-            CASE
-                WHEN regexp_matches(
+            NULLIF(
+                regexp_replace(
                     replace(trim(upper(FltNo1)), ' ', ''),
-                    '^([A-Z]{{2,3}})0+([1-9][0-9]*)$'
-                )
-                THEN regexp_replace(
-                    replace(trim(upper(FltNo1)), ' ', ''),
-                    '^([A-Z]{{2,3}})0+([1-9][0-9]*)$',
-                    '\\1\\2'
-                )
-                ELSE replace(trim(upper(FltNo1)), ' ', '')
-            END AS FN1,
-
-            CASE
-                WHEN regexp_matches(
+                    '{FLTNO_REGEX}',
+                    '\\1\\2'),'') AS FN1,
+            NULLIF(
+                regexp_replace(
                     replace(trim(upper(FltNo2)), ' ', ''),
-                    '^([A-Z]{{2,3}})0+([1-9][0-9]*)$'
-                )
-                THEN regexp_replace(
-                    replace(trim(upper(FltNo2)), ' ', ''),
-                    '^([A-Z]{{2,3}})0+([1-9][0-9]*)$',
-                    '\\1\\2'
-                )
-                ELSE replace(trim(upper(FltNo2)), ' ', '')
-            END AS FN2,
-
-            CASE
-                WHEN regexp_matches(
+                    '{FLTNO_REGEX}',
+                    '\\1\\2'),'') AS FN2,
+            NULLIF(
+                regexp_replace(
                     replace(trim(upper(FltNo3)), ' ', ''),
-                    '^([A-Z]{{2,3}})0+([1-9][0-9]*)$'
-                )
-                THEN regexp_replace(
-                    replace(trim(upper(FltNo3)), ' ', ''),
-                    '^([A-Z]{{2,3}})0+([1-9][0-9]*)$',
-                    '\\1\\2'
-                )
-                ELSE replace(trim(upper(FltNo3)), ' ', '')
-            END AS FN3,
-
-            CASE
-                WHEN regexp_matches(
+                    '{FLTNO_REGEX}',
+                    '\\1\\2'),'') AS FN3,
+            NULLIF(
+                regexp_replace(
                     replace(trim(upper(FltNo4)), ' ', ''),
-                    '^([A-Z]{{2,3}})0+([1-9][0-9]*)$'
-                )
-                THEN regexp_replace(
-                    replace(trim(upper(FltNo4)), ' ', ''),
-                    '^([A-Z]{{2,3}})0+([1-9][0-9]*)$',
-                    '\\1\\2'
-                )
-                ELSE replace(trim(upper(FltNo4)), ' ', '')
-            END AS FN4,
+                    '{FLTNO_REGEX}',
+                    '\\1\\2'),'') AS FN4,
 
             TRY_CAST(FltDate1 AS TIMESTAMP) AS DT1,
             TRY_CAST(FltDate2 AS TIMESTAMP) AS DT2,
@@ -192,6 +162,96 @@ def same_route(d1, d2):
     if pd.isna(d1) or pd.isna(d2):
         return False
     return abs(d2 - d1) <= timedelta(days=1)
+
+
+def is_valid_flightno(fn: str, dt: str) -> bool:
+    if pd.isna(fn) or pd.isna(dt):
+        return False
+
+    fn = str(fn).strip()
+
+    # ❌ Ignore empty strings
+    if not fn:
+        return False
+
+    # ❌ Corrupted huge numeric value → drop whole row
+    if fn.isdigit():
+        return False
+    if len(fn) > MAX_FLTNO_DIGITS:
+        return False
+    # ❌ Remove TK000, TK0000, 0000, etc. (Numeric part all zeros)
+    stripped = fn.rstrip("0")
+
+    # If string is empty (e.g., "0000") -> Drop
+    # If string is all alpha (e.g., "TK") -> Drop
+    if not stripped or stripped.isalpha():
+        return False
+
+    fn = fn.strip().upper()
+    # ❌ Reject invalid short flight numbers (G8, 6P, I5, etc.)
+    # Valid format: 2-3 letters + at least 1 digit (minimum length 3)
+    if not re.fullmatch(r"[A-Z0-9]{2,3}\d+", fn):
+        return False
+    return True
+
+
+# ==================================================
+# DEDUPLICATE EXACT FLIGHT SEGMENTS (CORRECT)
+# ==================================================
+def deduplicate_flights(flights):
+    # Sort flights by Date ONLY (x[1]).
+    flights.sort(key=lambda x: x[1])
+    seen_segments = set()
+    unique_flights = []
+
+    for fn, dt, dep_ap, arr_ap in flights:
+        # Deduplicate by FlightNo + FlightDate (date-level)
+        key = (fn, dt.date())
+
+        if key not in seen_segments:
+            seen_segments.add(key)
+            unique_flights.append((fn, dt, dep_ap, arr_ap))
+
+    return unique_flights
+
+
+# ==================================================
+# GROUP FLIGHTS INTO ROUTES (MAX 1-DAY SPAN)
+# ==================================================
+def group_into_routes(flights):
+    routes = []
+
+    current = [flights[0]]
+    route_start_date = flights[0][1]
+
+    for f in flights[1:]:
+        if abs(f[1] - route_start_date) <= timedelta(days=1):
+            current.append(f)
+        else:
+            routes.append(current)
+            current = [f]
+            route_start_date = f[1]
+
+    # IMPORTANT: append the last route
+    routes.append(current)
+
+    return routes
+
+
+def insert_target_table(con, out_rows):
+    df_out = pd.DataFrame(out_rows, dtype="object")
+    df_out.replace("", None, inplace=True)
+
+    unique_indices = [2, 3, 4] + list(range(5, 13)) + list(range(15, 20))
+
+    initial_rows = len(df_out)
+    df_out = df_out.drop_duplicates(subset=unique_indices)
+    dropped_rows = initial_rows - len(df_out)
+
+    if dropped_rows > 0:
+        log(f"🗑️  Dropped {dropped_rows} duplicate rows within batch")
+
+    con.execute(f"INSERT OR IGNORE INTO {TARGET_TABLE} SELECT * FROM df_out")
 
 
 def process_batch(con, offset):
@@ -228,33 +288,7 @@ def process_batch(con, offset):
             fn = getattr(row, f"FN{i}")
             dt = getattr(row, f"DT{i}")
 
-            # FIX: Use pd.isna to catch None, NaN, and NaT (Not a Time)
-            if pd.isna(fn) or pd.isna(dt):
-                continue
-
-            fn = str(fn).strip()
-
-            # ❌ Ignore empty strings
-            if not fn:
-                continue
-
-            # ❌ Corrupted huge numeric value → drop whole row
-            if fn.isdigit():
-                continue
-            if len(fn) > MAX_FLTNO_DIGITS:
-                continue
-            # ❌ Remove TK000, TK0000, 0000, etc. (Numeric part all zeros)
-            stripped = fn.rstrip("0")
-
-            # If string is empty (e.g., "0000") -> Drop
-            # If string is all alpha (e.g., "TK") -> Drop
-            if not stripped or stripped.isalpha():
-                continue
-
-            fn = fn.strip().upper()
-            # ❌ Reject invalid short flight numbers (G8, 6P, I5, etc.)
-            # Valid format: 2-3 letters + at least 1 digit (minimum length 3)
-            if not re.fullmatch(r"[A-Z0-9]{2,3}\d+", fn):
+            if not is_valid_flightno(fn, dt):
                 continue
 
             depAp = getattr(row, f"AP{i}")
@@ -266,46 +300,9 @@ def process_batch(con, offset):
         if not flights:
             continue
 
-        # ==================================================
-        # SORTING LOGIC
-        # ==================================================
-        # Sort flights by Date ONLY (x[1]).
-        flights.sort(key=lambda x: x[1])
+        flights = deduplicate_flights(flights)
 
-        # ==================================================
-        # DEDUPLICATE EXACT FLIGHT SEGMENTS (CORRECT)
-        # ==================================================
-        seen_segments = set()
-        unique_flights = []
-
-        for fn, dt, dep_ap, arr_ap in flights:
-            # Deduplicate by FlightNo + FlightDate (date-level)
-            key = (fn, dt.date())
-
-            if key not in seen_segments:
-                seen_segments.add(key)
-                unique_flights.append((fn, dt, dep_ap, arr_ap))
-
-        flights = unique_flights
-
-        # ==================================================
-        # GROUP FLIGHTS INTO ROUTES (MAX 1-DAY SPAN)
-        # ==================================================
-        routes = []
-
-        current = [flights[0]]
-        route_start_date = flights[0][1]
-
-        for f in flights[1:]:
-            if abs(f[1] - route_start_date) <= timedelta(days=1):
-                current.append(f)
-            else:
-                routes.append(current)
-                current = [f]
-                route_start_date = f[1]
-
-        # IMPORTANT: append the last route
-        routes.append(current)
+        routes = group_into_routes(flights)
 
         # Build output rows
         for route in routes:
@@ -327,19 +324,7 @@ def process_batch(con, offset):
     if not out_rows:
         return 0
 
-    df_out = pd.DataFrame(out_rows, dtype="object")
-    df_out.replace("", None, inplace=True)
-
-    unique_indices = [2, 3, 4] + list(range(5, 13)) + list(range(15, 20))
-
-    initial_rows = len(df_out)
-    df_out = df_out.drop_duplicates(subset=unique_indices)
-    dropped_rows = initial_rows - len(df_out)
-
-    if dropped_rows > 0:
-        log(f"🗑️  Dropped {dropped_rows} duplicate rows within batch")
-
-    con.execute(f"INSERT OR IGNORE INTO {TARGET_TABLE} SELECT * FROM df_out")
+    insert_target_table(con, out_rows)
 
     return len(out_rows)
 

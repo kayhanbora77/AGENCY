@@ -239,10 +239,10 @@ def process_batch(con, offset):
                 continue
 
             # ❌ Corrupted huge numeric value → drop whole row
-            if fn.isdigit() and len(fn) > MAX_FLTNO_DIGITS:
-                flights = []
-                break
-
+            if fn.isdigit():
+                continue
+            if len(fn) > MAX_FLTNO_DIGITS:
+                continue
             # ❌ Remove TK000, TK0000, 0000, etc. (Numeric part all zeros)
             stripped = fn.rstrip("0")
 
@@ -322,7 +322,6 @@ def process_batch(con, offset):
                 if i + 1 < len(ap_out):
                     ap_out[i + 1] = arr_ap
 
-            # out_rows.append(row_out + fn_out + dt_out + ap_out)
             out_rows.append(base1 + fn_out + dt_out + base2 + ap_out)
 
     if not out_rows:

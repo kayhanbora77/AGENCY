@@ -1,53 +1,56 @@
-# TRUST Travel Data Pipeline
+# AGENCY Travel Data Pipeline
 
-A high-performance ETL (Extract, Transform, Load) pipeline for processing flight booking data using [DuckDB](https://duckdb.org/) and [Pandas](https://pandas.pydata.org/).
+A high-performance, modular ETL (Extract, Transform, Load) system for processing diverse travel booking datasets into a unified analytical format using [DuckDB](https://duckdb.org/) and [Pandas](https://pandas.pydata.org/).
 
 ## 🚀 Overview
 
-This project is designed to ingest raw travel data (from Excel or other sources), clean and normalize it, and restructure flight segments into complete passenger journeys. It handles complex logic such as:
+This repository contains a suite of specialized ETL pipelines designed to ingest raw airline/agency data (Excel, CSV, etc.), clean it, and reconstruct complex passenger journeys. The system is architecture for speed and memory efficiency, capable of handling millions of records on consumer hardware.
 
-- **Flight Normalization**: Standardizing flight numbers and dates.
-- **Route Reconstruction**: Stitching together individual flight legs into continuous trips based on time thresholds (e.g., 36-hour stopover rule).
-- **Data Deduplication**: Removing duplicate entries to ensure data integrity.
-- **Batch Processing**: Efficiently handling large datasets with memory-optimized DuckDB configurations.
+### Key Features
+
+- **Dataset-Specific Logic**: Custom cleaning and trip reconstruction rules for each data source.
+- **Unified Destination**: All pipelines output to a shared, high-speed DuckDB instance.
+- **Route Stitching**: Automatically combines individual flight segments into continuous passenger trips based on time thresholds (e.g., 24-36 hour stopover rules).
+- **Batch Processing**: Memory-optimized execution using configurable batch sizes and memory limits.
 
 ## 📂 Project Structure
 
-- **`TRUST/`**
-  - `trust_travel.py`: Main ETL script for the TRUST dataset. Handles route logic and target table population.
-  - `load_excels.py`: Utility to bulk load raw Excel data files into DuckDB for processing.
-- **`TBO/`**
-  - `tbo3.py`: ETL logic specific to the TBO dataset, featuring advanced unpivoting and trip sequence detection.
+Each dataset has its own directory containing loader utilities and the main ETL script:
+
+- **[`BLUESTAR/`](BLUESTAR/README.md)**: Processing for Blue Star dataset.
+- **`TA/`**: Processing for Travel Agency dataset.
+- **`TBO/`**: Processing for TBO dataset.
+- **`TRIPJACK/`**: Processing for Tripjack dataset.
+- **`TRUST/`**: Processing for TRUST dataset.
 
 ## 🛠️ Technologies
 
 - **Python 3.10+**
-- **DuckDB**: Embedded SQL OLAP database for fast analytical queries.
-- **Pandas**: Data manipulation and DataFrame handling.
-
-## ⚙️ Configuration
-
-Key configuration parameters (found in scripts):
-
-- `DATABASE_DIR`: Path to the DuckDB database file.
-- `BATCH_SIZE`: Number of rows processed per batch to manage memory.
-- `THREADS`: CPU threads allocated for DuckDB execution.
-- `MEMORY_LIMIT`: Hard memory limit for DuckDB to prevent OOM errors.
+- **DuckDB**: Fast analytical database for SQL-based transformations.
+- **Pandas**: Efficient data manipulation and unpivoting.
 
 ## 🏃 Usage
 
-1. **Load Data**:
-   Ensure your raw Excel files are in the configured directory and run:
+To run a specific pipeline, navigate to the component directory or run the script directly:
+
+1. **Load Data** (Example for BLUESTAR):
 
    ```bash
-   python TRUST/load_excels.py
+   python BLUESTAR/load_excels.py
    ```
 
-2. **Run Pipeline**:
-   Execute the main processing script to clean and transform the data:
+2. **Process Pipeline**:
    ```bash
-   python TRUST/trust_travel.py
+   python BLUESTAR/bluestar.py
    ```
+
+## ⚙️ Configuration
+
+Shared configuration patterns across scripts:
+
+- `THREADS`: CPU threads for DuckDB.
+- `MEMORY_LIMIT`: RAM allocation for the database.
+- `BATCH_SIZE`: Number of rows processed per iteration.
 
 ## 📄 License
 

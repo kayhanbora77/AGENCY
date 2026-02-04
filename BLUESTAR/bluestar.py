@@ -17,9 +17,11 @@ TARGET_TABLE = "BLUESTAR_TARGET"
 
 FLTNO_REGEX = r"^([A-Z]{2,3}|\d[A-Z])0+([1-9][0-9]*)$"
 
-MAX_FLTNO_DIGITS = 10
+MAX_FLTNO_DIGITS = 8
 
 BATCH_SIZE = 100_000
+
+ROUTE_MAX_DAYS = 1
 
 VALID_YEAR_MIN = 2010
 VALID_YEAR_MAX = 2030
@@ -154,14 +156,11 @@ def create_clean_view(con):
     """)
 
 
-# ==================================================
-# ROUTE LOGIC
-# ==================================================
-def same_route(d1, d2):
+def is_same_route(d1, d2):
     # Check for NaT (Not a Time) before calculation
     if pd.isna(d1) or pd.isna(d2):
         return False
-    return abs(d2 - d1) <= timedelta(days=1)
+    return abs(d2 - d1) <= timedelta(days=ROUTE_MAX_DAYS)
 
 
 def is_valid_flightno(fn: str, dt: str) -> bool:
@@ -196,7 +195,7 @@ def is_valid_flightno(fn: str, dt: str) -> bool:
 
 
 # ==================================================
-# DEDUPLICATE EXACT FLIGHT SEGMENTS (CORRECT)
+# DEDUPLICATE EXACT FLIGHT SEGMENTS
 # ==================================================
 def deduplicate_flights(flights):
     # Sort flights by Date ONLY (x[1]).
@@ -225,7 +224,7 @@ def group_into_routes(flights):
     route_start_date = flights[0][1]
 
     for f in flights[1:]:
-        if abs(f[1] - route_start_date) <= timedelta(days=1):
+        if is_same_route(f[1], route_start_date):
             current.append(f)
         else:
             routes.append(current)

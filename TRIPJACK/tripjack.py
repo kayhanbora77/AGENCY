@@ -2,6 +2,8 @@ import duckdb
 import pandas as pd
 import time
 from pathlib import Path
+import re
+from datetime import timedelta
 
 # ==================================================
 # CONFIG
@@ -14,6 +16,9 @@ SOURCE_TABLE = "TRIPJACK"
 TARGET_TABLE = "TRIPJACK_TARGET"
 
 BATCH_SIZE = 100_000
+MAX_FLTNO_DIGITS = 8
+FLTNO_REGEX = r"^([A-Z]{2,3}|\d[A-Z])0+([1-9][0-9]*)$"
+ROUTE_MAX_DAYS = 1
 
 VALID_YEAR_MIN = 2010
 VALID_YEAR_MAX = 2030
@@ -76,7 +81,14 @@ def create_target_table(con):
             Airport3 VARCHAR,
             Airport4 VARCHAR,
             Airport5 VARCHAR,
-            Airport6 VARCHAR
+            Airport6 VARCHAR,
+
+            CONSTRAINT uq_tripjack UNIQUE (
+                BookingRef_PNR, Airline, ETicketNo,
+                FlightNumber1, FlightNumber2, FlightNumber3, FlightNumber4, FlightNumber5,
+                FlightDate1, FlightDate2, FlightDate3, FlightDate4, FlightDate5,
+                Airport1, Airport2, Airport3, Airport4, Airport5, Airport6
+            )
         )
     """)
 
@@ -98,15 +110,30 @@ def create_clean_view(con):
             Airline,
             ETicketNo,
 
-            NULLIF(regexp_replace(trim(upper(FlightNumber1)),'^([A-Z][A-Z][A-Z]?)0*([0-9]+)$',
+            NULLIF(
+                regexp_replace(
+                    replace(trim(upper(FlightNumber1)), ' ', ''),
+                    '{FLTNO_REGEX}',
                     '\\1\\2'),'') AS FN1,
-            NULLIF(regexp_replace(trim(upper(FlightNumber2)),'^([A-Z][A-Z][A-Z]?)0*([0-9]+)$',
+            NULLIF(
+                regexp_replace(
+                    replace(trim(upper(FlightNumber2)), ' ', ''),
+                    '{FLTNO_REGEX}',
                     '\\1\\2'),'') AS FN2,
-            NULLIF(regexp_replace(trim(upper(FlightNumber3)),'^([A-Z][A-Z][A-Z]?)0*([0-9]+)$',
+            NULLIF(
+                regexp_replace(
+                    replace(trim(upper(FlightNumber3)), ' ', ''),
+                    '{FLTNO_REGEX}',
                     '\\1\\2'),'') AS FN3,
-            NULLIF(regexp_replace(trim(upper(FlightNumber4)),'^([A-Z][A-Z][A-Z]?)0*([0-9]+)$',
+            NULLIF(
+                regexp_replace(
+                    replace(trim(upper(FlightNumber4)), ' ', ''),
+                    '{FLTNO_REGEX}',
                     '\\1\\2'),'') AS FN4,
-            NULLIF(regexp_replace(trim(upper(FlightNumber5)),'^([A-Z][A-Z][A-Z]?)0*([0-9]+)$',
+            NULLIF(
+                regexp_replace(
+                    replace(trim(upper(FlightNumber5)), ' ', ''),
+                    '{FLTNO_REGEX}',
                     '\\1\\2'),'') AS FN5,
 
             TRY_CAST(DepartureDateLocal1 AS TIMESTAMP) AS DT1,
@@ -131,11 +158,79 @@ def create_clean_view(con):
     """)
 
 
-# ==================================================
-# ROUTE LOGIC
-# ==================================================
-def same_route(d1, d2):
-    return abs((d2 - d1).total_seconds()) <= 36 * 3600
+def is_same_route(d1, d2):
+    # Check for NaT (Not a Time) before calculation
+    if pd.isna(d1) or pd.isna(d2):
+        return False
+    return abs(d2 - d1) <= timedelta(days=ROUTE_MAX_DAYS)
+
+
+def is_valid_flightno(fn: str, dt: str) -> bool:
+    if pd.isna(fn) or pd.isna(dt):
+        return False
+
+    fn = str(fn).strip()
+
+    # ❌ Ignore empty strings
+    if not fn:
+        return False
+
+    # ❌ Corrupted huge numeric value → drop whole row
+    if fn.isdigit():
+        return False
+    if len(fn) > MAX_FLTNO_DIGITS:
+        return False
+    # ❌ Remove TK000, TK0000, 0000, etc. (Numeric part all zeros)
+    stripped = fn.rstrip("0")
+
+    # If string is empty (e.g., "0000") -> Drop
+    # If string is all alpha (e.g., "TK") -> Drop
+    if not stripped or stripped.isalpha():
+        return False
+
+    fn = fn.strip().upper()
+    # ❌ Reject invalid short flight numbers (G8, 6P, I5, etc.)
+    # Valid format: 2-3 letters + at least 1 digit (minimum length 3)
+    if not re.fullmatch(r"[A-Z0-9]{2,3}\d+", fn):
+        return False
+    return True
+
+
+def deduplicate_flights(flights):
+    # Sort flights by Date ONLY (x[1]).
+    flights.sort(key=lambda x: x[1])
+    seen_segments = set()
+    unique_flights = []
+
+    for fn, dt, dep_ap, arr_ap in flights:
+        # Deduplicate by FlightNo + FlightDate (date-level)
+        key = (fn, dt.date())
+
+        if key not in seen_segments:
+            seen_segments.add(key)
+            unique_flights.append((fn, dt, dep_ap, arr_ap))
+
+    return unique_flights
+
+
+def group_into_routes(flights):
+    routes = []
+
+    current = [flights[0]]
+    route_start_date = flights[0][1]
+
+    for f in flights[1:]:
+        if is_same_route(f[1], route_start_date):
+            current.append(f)
+        else:
+            routes.append(current)
+            current = [f]
+            route_start_date = f[1]
+
+    # IMPORTANT: append the last route
+    routes.append(current)
+
+    return routes
 
 
 def process_batch(con, offset):
@@ -167,14 +262,7 @@ def process_batch(con, offset):
             fn = getattr(row, f"FN{i}")
             dt = getattr(row, f"DT{i}")
 
-            # ❌ Pair mismatch → ignore
-            if fn is None or dt is None:
-                continue
-
-            fn = str(fn).strip()
-
-            # ❌ Ignore flight numbers ending with "000"
-            if not fn or fn.endswith("000"):
+            if not is_valid_flightno(fn, dt):
                 continue
 
             depAp = getattr(row, f"AP{i}")
@@ -186,18 +274,9 @@ def process_batch(con, offset):
         if not flights:
             continue
 
-        # Group flights into routes
-        routes = []
-        current = [flights[0]]
+        flights = deduplicate_flights(flights)
 
-        for f in flights[1:]:
-            if same_route(current[-1][1], f[1]):
-                current.append(f)
-            else:
-                routes.append(current)
-                current = [f]
-
-        routes.append(current)
+        routes = group_into_routes(flights)
 
         # Build output rows
         for route in routes:
@@ -219,7 +298,7 @@ def process_batch(con, offset):
         return 0
 
     df_out = pd.DataFrame(out_rows, dtype="object")
-    con.execute(f"INSERT INTO {TARGET_TABLE} SELECT * FROM df_out")
+    con.execute(f"INSERT OR IGNORE INTO {TARGET_TABLE} SELECT * FROM df_out")
 
     return len(out_rows)
 

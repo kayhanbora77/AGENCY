@@ -14,7 +14,7 @@ DB_PATH = DATABASE_DIR / DATABASE_NAME
 THREADS = 4
 MEMORY_LIMIT = "6GB"
 TEMP_DIR = "/tmp/duckdb_temp"
-EXCEL_DIR = Path("/home/kayhan/Desktop/Gelen_Datalar/TRIPJACK/")
+EXCEL_DIR = Path("/home/kayhan/Desktop/Gelen_Datalar/TRIPJACK/PROCEED/")
 TABLE_NAME = "TRIPJACK"
 
 
@@ -49,13 +49,13 @@ def load_excel_files(con) -> None:
     for file in sorted(EXCEL_DIR.glob("*.xlsx")):
         log(f"⏰ Loading {file.name}")
 
-        if file.name != "TripJack_Edited.xlsx":
-            continue
-
         sheets = pd.read_excel(file, sheet_name=None, dtype=str)
 
         for sheet_name, df in sheets.items():
-            if df.empty:
+            log(f"📄 Sheet '{sheet_name}' shape={df.shape}")
+
+            if df.dropna(how="all").empty:
+                log(f"⚠️ Sheet '{sheet_name}' has no real data, skipping")
                 continue
 
             for col in DATE_COLUMNS:
@@ -73,6 +73,9 @@ def load_excel_files(con) -> None:
                 )
 
             dfs.append(df)
+
+    if not dfs:
+        raise RuntimeError("❌ No usable data found in any Excel file")
 
     final_df = pd.concat(dfs, ignore_index=True)
 

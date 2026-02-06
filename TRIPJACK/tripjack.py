@@ -84,7 +84,7 @@ def create_target_table(con):
             Airport6 VARCHAR,
 
             CONSTRAINT uq_tripjack UNIQUE (
-                BookingRef_PNR, Airline, ETicketNo,
+                Airline, ETicketNo,
                 FlightNumber1, FlightNumber2, FlightNumber3, FlightNumber4, FlightNumber5,
                 FlightDate1, FlightDate2, FlightDate3, FlightDate4, FlightDate5,
                 Airport1, Airport2, Airport3, Airport4, Airport5, Airport6
@@ -303,9 +303,6 @@ def process_batch(con, offset):
     return len(out_rows)
 
 
-# ==================================================
-# MAIN
-# ==================================================
 def main():
     start = time.time()
     log(f"🚀 Start {now_str()}")

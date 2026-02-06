@@ -39,11 +39,10 @@ def load_excel_files(con) -> None:
     dfs = []
 
     DATE_COLUMNS = [
-        "DepartureDateLocal1",
-        "DepartureDateLocal2",
-        "DepartureDateLocal3",
-        "DepartureDateLocal4",
-        "DepartureDateLocal5",
+        "FlightDate1",
+        "FlightDate2",
+        "FlightDate3",
+        "FlightDate4",
     ]
 
     for file in sorted(EXCEL_DIR.glob("*.xlsx")):
@@ -60,17 +59,7 @@ def load_excel_files(con) -> None:
 
             for col in DATE_COLUMNS:
                 if col in df.columns:
-                    df[col] = pd.to_datetime(df[col], errors="coerce")
-
-            if "ETicketNo" in df.columns:
-                df["ETicketNo"] = (
-                    df["ETicketNo"]
-                    .dropna()
-                    .astype(str)
-                    .str.split(",")
-                    .str[0]
-                    .str.strip()
-                )
+                    df[col] = pd.to_datetime(df[col], errors="coerce", dayfirst=True)
 
             dfs.append(df)
 

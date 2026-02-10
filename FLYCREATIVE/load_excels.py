@@ -39,6 +39,7 @@ def load_excel_files(con) -> None:
     dfs = []
 
     DATE_COLUMNS = [
+        "TicketDate",
         "FlightDate1",
         "FlightDate2",
         "FlightDate3",

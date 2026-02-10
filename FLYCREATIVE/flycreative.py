@@ -17,9 +17,7 @@ TARGET_TABLE = "FLYCREATIVE_TARGET"
 
 BATCH_SIZE = 100_000
 MAX_FLTNO_DIGITS = 10
-FLTNO_REGEX_old = r"^([A-Z]{2,3}|\d[A-Z])0+([1-9][0-9]*)$"
-FLTNO_REGEX = r"^([A-Z0-9]{2,3})(\d+)[A-Z]*$"
-
+FLTNO_REGEX = r"^([A-Z]{2,3})0+([1-9][0-9]*)$"
 
 ROUTE_MAX_DAYS = 1
 
@@ -112,24 +110,32 @@ def create_clean_view(con):
 
             NULLIF(
                 regexp_replace(
-                    replace(trim(upper(FlightNo1)), ' ', ''),
+                    regexp_replace(upper(FlightNo1), '[^A-Z0-9]', '', 'g'),
                     '{FLTNO_REGEX}',
-                    '\\1\\2'),'') AS FN1,
+                    '\\1\\2'
+                ),
+            '') AS FN1,
             NULLIF(
                 regexp_replace(
-                    replace(trim(upper(FlightNo2)), ' ', ''),
+                    regexp_replace(upper(FlightNo2), '[^A-Z0-9]', '', 'g'),
                     '{FLTNO_REGEX}',
-                    '\\1\\2'),'') AS FN2,
+                    '\\1\\2'
+                ),
+            '') AS FN2,
             NULLIF(
                 regexp_replace(
-                    replace(trim(upper(FlightNo3)), ' ', ''),
+                    regexp_replace(upper(FlightNo3), '[^A-Z0-9]', '', 'g'),
                     '{FLTNO_REGEX}',
-                    '\\1\\2'),'') AS FN3,
+                    '\\1\\2'
+                ),
+            '') AS FN3,
             NULLIF(
                 regexp_replace(
-                    replace(trim(upper(FlightNo4)), ' ', ''),
+                    regexp_replace(upper(FlightNo4), '[^A-Z0-9]', '', 'g'),
                     '{FLTNO_REGEX}',
-                    '\\1\\2'),'') AS FN4,
+                    '\\1\\2'
+                ),
+            '') AS FN4, 
 
             TRY_CAST(FlightDate1 AS TIMESTAMP) AS DT1,
             TRY_CAST(FlightDate2 AS TIMESTAMP) AS DT2,
@@ -168,8 +174,13 @@ def is_valid_flightno(fn: str, dt: str) -> bool:
         return False
 
     # ❌ Corrupted huge numeric value → drop whole row
-    if fn.isdigit():
+    if fn.isdigit() and len(fn) > 8:
         return False
+
+    # Reject all-zero values
+    if fn.isdigit() and int(fn) == 0:
+        return False
+
     if len(fn) > MAX_FLTNO_DIGITS:
         return False
     # ❌ Remove TK000, TK0000, 0000, etc. (Numeric part all zeros)
@@ -181,6 +192,15 @@ def is_valid_flightno(fn: str, dt: str) -> bool:
         return False
 
     fn = fn.strip().upper()
+
+    # All-zero or empty
+    if not fn or fn.strip("0") == "":
+        return False
+
+    # Allow digits-only (after cleaning)
+    if fn.isdigit():
+        return True
+
     # ❌ Reject invalid short flight numbers (G8, 6P, I5, etc.)
     # Valid format: 2-3 letters + at least 1 digit (minimum length 3)
     if not re.fullmatch(r"[A-Z0-9]{2,3}\d+", fn):

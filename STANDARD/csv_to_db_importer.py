@@ -5,6 +5,7 @@ import uuid
 from typing import Dict, List, Any
 from pathlib import Path
 import os
+import re
 
 # ==================================================
 # DUCKDB CONFIG
@@ -18,6 +19,169 @@ MEMORY_LIMIT = "8GB"
 TEMP_DIR = "/tmp/duckdb_temp"
 
 DATABASE_DIR.mkdir(parents=True, exist_ok=True)
+
+EU_CARRIER = {"14355666", "14355667", "14355668"}
+
+EU_AIRPORTS = {
+    # Austria
+    "VIE",
+    "SZG",
+    "INN",
+    "GRZ",
+    "KLU",
+    "LNZ",
+    # Belgium
+    "BRU",
+    "CRL",
+    "ANR",
+    "OST",
+    # Bulgaria
+    "SOF",
+    "VAR",
+    "BOJ",
+    "PDV",
+    # Croatia
+    "ZAG",
+    "SPU",
+    "DBV",
+    "ZAD",
+    "PUY",
+    "OSI",
+    # Cyprus
+    "LCA",
+    "PFO",
+    # Czech Republic
+    "PRG",
+    "BRQ",
+    "OSR",
+    # Denmark
+    "CPH",
+    "BLL",
+    "AAL",
+    "AAR",
+    "BLL",
+    # Estonia
+    "TLL",
+    # Finland
+    "HEL",
+    "TMP",
+    "TKU",
+    # France
+    "CDG",
+    "ORY",
+    "NCE",
+    "LYS",
+    "MRS",
+    "TLS",
+    "BOD",
+    "NTE",
+    "STR",
+    "MLH",
+    # Germany
+    "FRA",
+    "MUC",
+    "DUS",
+    "BER",
+    "HAM",
+    "CGN",
+    "STR",
+    "HAJ",
+    "NUE",
+    "LEJ",
+    # Greece
+    "ATH",
+    "SKG",
+    "HER",
+    "RHO",
+    "CFU",
+    "JMK",
+    "JTR",
+    "KGS",
+    "ZTH",
+    # Hungary
+    "BUD",
+    # Ireland
+    "DUB",
+    "SNN",
+    "ORK",
+    # Italy
+    "FCO",
+    "MXP",
+    "VCE",
+    "LIN",
+    "BLQ",
+    "NAP",
+    "CTA",
+    "FLR",
+    "PMO",
+    # Latvia
+    "RIX",
+    # Lithuania
+    "VNO",
+    "KUN",
+    # Luxembourg
+    "LUX",
+    # Malta
+    "MLA",
+    # Netherlands
+    "AMS",
+    "RTM",
+    "EIN",
+    "MST",
+    # Poland
+    "WAW",
+    "KRK",
+    "GDN",
+    "POZ",
+    "WRO",
+    "KTW",
+    "LUZ",
+    # Portugal
+    "LIS",
+    "OPO",
+    "FAO",
+    "FNC",
+    # Romania
+    "OTP",
+    "CLJ",
+    "TIM",
+    # Slovakia
+    "BTS",
+    # Slovenia
+    "LJU",
+    # Spain
+    "MAD",
+    "BCN",
+    "AGP",
+    "PMI",
+    "ALC",
+    "VLC",
+    "SVQ",
+    "BIO",
+    "TFS",
+    "LPA",
+    # Sweden
+    "ARN",
+    "GOT",
+    "MMX",
+    "BMA",
+}
+
+
+def is_eu_carrier(airline_code: str) -> bool:
+    if airline_code is None or pd.isna(airline_code):
+        return False
+
+    airline_code = str(airline_code).upper().strip()
+    return airline_code in EU_CARRIER
+
+
+def is_eu_airport(airport: str) -> bool:
+    if airport is None or pd.isna(airport):
+        return False
+
+    airport = str(airport).upper().strip()
+    return airport in EU_AIRPORTS
 
 
 class CSVToDBImporter:
@@ -62,37 +226,43 @@ class CSVToDBImporter:
 
         return pd.read_csv(csv_path, sep=",", encoding="utf-8")
 
-    def parse_flight_legs(
-        self, row: pd.Series, connection_id: str
-    ) -> List[Dict[str, Any]]:
+    def parse_flight_legs(self, row: pd.Series) -> List[Dict[str, Any]]:
         legs = []
 
-        flight_no_cols = [c for c in row.index if c.startswith("FlightNo")]
-        flight_no_cols.sort(key=lambda x: int(x.replace("FlightNo", "")))
+        flight_no_cols = [
+            c for c in row.index if re.match(r"^Flight(No|Number)\d+$", c)
+        ]
+        flight_no_cols.sort(key=lambda c: int(re.search(r"\d+$", c).group()))
 
         if not flight_no_cols:
             return legs
 
+        is_eligible = False
         for i, flight_no_col in enumerate(flight_no_cols, start=1):
             flight_no = row.get(flight_no_col)
 
             if pd.isna(flight_no) or str(flight_no).strip() == "":
                 break
 
-            flight_date = self.parse_date(row.get(f"FlightDate{i}"))
+            flight_date = self.parse_date(
+                row.get(f"FlightDate{i}") or row.get(f"DepartureDateLocal{i}")
+            )
             from_airport = row.get(f"Airport{i}")
             to_airport = row.get(f"Airport{i + 1}")
+
+            if is_eu_airport(from_airport) or is_eu_airport(to_airport):
+                is_eligible = True
 
             legs.append(
                 {
                     "Id": str(uuid.uuid4()),
-                    "ConnectionID": connection_id,
+                    "ConnectionID": None,
                     "PaxName": row.get("PaxName"),
                     "AgencyRefNumber": None,
                     "ETicketNo": str(row.get("TicketNumber"))
                     if pd.notna(row.get("TicketNumber"))
                     else None,
-                    "FlightNumber": str(flight_no).replace(" ", "").upper(),
+                    "FlightNumber": flight_no,  # str(flight_no).replace(" ", "").upper(),
                     "DepartureDate": flight_date,
                     "FileName": None,
                     "BookingRef": row.get("PNR"),
@@ -100,17 +270,19 @@ class CSVToDBImporter:
                     "FromAirport": from_airport,
                     "ToAirport": to_airport,
                     "LastLegAirport": None,
-                    "EUEligible": False,
+                    "EUEligible": eu_eligible,
                     "EUEligibleDuration": 0,
-                    "ExtraNote": row.get("AirlineName"),
-                    "FlightFound": True,
+                    "ExtraNote": None,
+                    "FlightFound": False,
                 }
             )
 
         if legs:
             final_airport = legs[-1]["ToAirport"]
+            connection_id = str(uuid.uuid4())
             for leg in legs:
                 leg["LastLegAirport"] = final_airport
+                leg["ConnectionID"] = connection_id
 
         return legs
 
@@ -161,12 +333,11 @@ class CSVToDBImporter:
         print(f"📊 Rows found: {len(df)}")
 
         file_name = os.path.basename(csv_path)
-        connection_id = str(uuid.uuid4())
 
         all_records = []
 
         for _, row in df.iterrows():
-            legs = self.parse_flight_legs(row, connection_id)
+            legs = self.parse_flight_legs(row)
             for leg in legs:
                 leg["FileName"] = file_name
             all_records.extend(legs)

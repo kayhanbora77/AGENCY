@@ -23,10 +23,10 @@ SPECIAL_NON_EU_CARRIERS = {
     "BA",  # British Airways
     "TK",  # Turkish Airlines
     "PC",  # Pegasus
-    "8Q",  # Onur Air
-    "KK",  # AtlasGlobal / Atlasjet
+    "JU",  # AirSerbian
     "H2",  # Sky Airline
     "FH",  # Freebird Airlines
+    "VF",  # AJet(Anadolu jet)
 }
 
 # Global cached sets (faster lookup)

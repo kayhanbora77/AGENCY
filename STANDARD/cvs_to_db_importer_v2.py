@@ -170,7 +170,7 @@ class CSVToDBImporter:
             for c in row.index
             if re.match(r"^Flight(?:No|Number)(\d+)$", str(c), re.IGNORECASE)
         ]
-        flight_no_cols.sort(key=lambda c: int(re.search(r"\d+$", c).group()))
+        # flight_no_cols.sort(key=lambda c: int(re.search(r"\d+$", c).group()))
 
         if not flight_no_cols:
             return []

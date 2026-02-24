@@ -1,9 +1,9 @@
 import pyodbc
 
-SERVER = "c2rflightdata.eastus2.cloudapp.azure.com"
-DATABASE = "C2RFlightDataUser"
-USERNAME = "sa"
-PASSWORD = "[PASSWORD]"
+SERVER = "172.210.241.56"
+DATABASE = "FlightDelay"
+USERNAME = "C2RFlightDataUser"
+PASSWORD = "C2RFlightDataServerP0ss!"
 
 conn_str = (
     "DRIVER={ODBC Driver 18 for SQL Server};"

@@ -208,6 +208,7 @@ class CSVToDBImporter:
                     "FromAirport": str(from_airport).upper().strip(),
                     "ToAirport": str(to_airport).upper().strip(),
                     "AirlineCode": airline_code,
+                    "LegNo": i,
                 }
             )
 
@@ -243,6 +244,7 @@ class CSVToDBImporter:
                 "EUEligibleDuration": 0,
                 "ExtraNote": None,
                 "FlightFound": False,
+                "LegNo": leg["LegNo"],
             }
             final_legs.append(record)
 
@@ -272,6 +274,7 @@ class CSVToDBImporter:
             "EUEligibleDuration",
             "ExtraNote",
             "FlightFound",
+            "LegNo",
         ]
 
         df = pd.DataFrame(records, columns=columns)
@@ -310,10 +313,7 @@ class CSVToDBImporter:
 if __name__ == "__main__":
     importer = CSVToDBImporter()
 
-    # Example path – change as needed
-    CSV_FILE = (
-        "/home/kayhan/Desktop/Gelen_Datalar/TRUST_TRAVEL/TRUST_TRAVEL_TARGET_4.csv"
-    )
+    CSV_FILE = "/home/kayhan/Desktop/Gelen_Datalar/TRUST_TRAVEL/PROCEED/TRUST_TRAVEL_TARGET_4.csv"
 
     try:
         importer.import_csv(CSV_FILE)

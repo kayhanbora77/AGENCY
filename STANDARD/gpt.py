@@ -1,9 +1,7 @@
 import time
 from pathlib import Path
-
 import duckdb
 import pandas as pd
-from typing import Any
 
 
 # ────────────────────────────────────────────────
@@ -17,20 +15,6 @@ THREADS = 4
 MEMORY_LIMIT = "6GB"
 TEMP_DIR = "/tmp/duckdb_temp"
 
-# Global cached sets (faster lookup)
-EU_AIRPORTS: set = set()
-
-SPECIAL_NON_EU_CARRIERS = {
-    "BA",  # British Airways
-    "TK",  # Turkish Airlines
-    "PC",  # Pegasus
-    "JU",  # AirSerbian
-    "H2",  # Sky Airline
-    "FH",  # Freebird Airlines
-    "VF",  # AJet(Anadolu jet)
-    "VS",  # Virgin Atlantic
-}
-
 SPECIAL_NON_EU_TIME_LIMITS = {
     "BA": (6, 6),
     "TK": (2, 2),
@@ -43,6 +27,9 @@ SPECIAL_NON_EU_TIME_LIMITS = {
 }
 
 
+# ────────────────────────────────────────────────
+# UTILITIES
+# ────────────────────────────────────────────────
 def log(msg: str) -> None:
     print(msg, flush=True)
 
@@ -60,32 +47,9 @@ def connect_db() -> duckdb.DuckDBPyConnection:
     return con
 
 
-def is_eu_airport(airport: Any) -> bool:
-    if airport is None or pd.isna(airport):
-        return False
-    code = str(airport).upper().strip()
-    return code in EU_AIRPORTS
-
-
-def load_airports(con: duckdb.DuckDBPyConnection, force_refresh=False) -> set:
-    global EU_AIRPORTS
-    if EU_AIRPORTS and not force_refresh:
-        return EU_AIRPORTS
-
-    try:
-        result = con.execute("SELECT CodeIataAirport FROM AIRPORTS").fetchall()
-        EU_AIRPORTS = {r[0].strip().upper() for r in result if r[0]}
-    except Exception as e:
-        print(f"Error loading airports: {e}")
-        EU_AIRPORTS = set()
-
-    return EU_AIRPORTS
-
-
-def __init__(con: duckdb.DuckDBPyConnection):
-    load_airports(con)
-
-
+# ────────────────────────────────────────────────
+# LOAD DATA
+# ────────────────────────────────────────────────
 def get_eu_eligible_data(con: duckdb.DuckDBPyConnection) -> pd.DataFrame:
     log("Loading EU eligible data...")
 
@@ -94,8 +58,6 @@ def get_eu_eligible_data(con: duckdb.DuckDBPyConnection) -> pd.DataFrame:
             t.ConnectionID,
             t.LegNo,
             t.AirlineCode,
-            dep.NameCountry AS FromCountry,
-            arr.NameCountry AS ToCountry,
             COALESCE(fromL1.LimitationYears, 0) AS fromL1,
             COALESCE(toL1.LimitationYears,   0) AS toL1,
             COALESCE(fromL2.LimitationYears, 0) AS fromL2,
@@ -115,62 +77,69 @@ def get_eu_eligible_data(con: duckdb.DuckDBPyConnection) -> pd.DataFrame:
 
     if df.empty:
         log("No EU eligible records found.")
-        con.close()
-        return
+        return pd.DataFrame()
 
     log(f"Loaded {len(df):,} legs")
-
     return df
 
 
+# ────────────────────────────────────────────────
+# COMPUTE TIME LIMITS
+# ────────────────────────────────────────────────
 def get_updated_data(df: pd.DataFrame) -> pd.DataFrame:
-    # Ensure correct order (safety belt even with ORDER BY in query)
+    log("Computing time limits per connection...")
+
     df = df.sort_values(["ConnectionID", "LegNo"], ignore_index=True)
 
-    # Make sure numeric (defensive)
+    # Ensure numeric safety
     num_cols = ["fromL1", "toL1", "fromL2", "toL2"]
     df[num_cols] = (
         df[num_cols].apply(pd.to_numeric, errors="coerce").fillna(0).astype("int32")
     )
 
-    log("Computing time limits per connection...")
-
-    # Find first & last leg per group using LegNo
+    # Get first and last legs per connection
     first_idx = df.groupby("ConnectionID")["LegNo"].idxmin()
     last_idx = df.groupby("ConnectionID")["LegNo"].idxmax()
 
     first = df.loc[first_idx, ["ConnectionID", "fromL1", "fromL2"]].rename(
         columns={"fromL1": "dep_L1", "fromL2": "dep_L2"}
     )
+
     last = df.loc[last_idx, ["ConnectionID", "toL1", "toL2"]].rename(
         columns={"toL1": "arr_L1", "toL2": "arr_L2"}
     )
-    fromCountry = df.loc[first_idx, ["ConnectionID", "FromCountry"]]
-    toCountry = df.loc[last_idx, ["ConnectionID", "ToCountry"]]
 
-    merged = first.merge(last, on="ConnectionID")
+    airline = df.loc[first_idx, ["ConnectionID", "AirlineCode"]]
 
+    merged = first.merge(last, on="ConnectionID").merge(airline, on="ConnectionID")
+
+    # Default calculation
     merged["TimeLimitL1"] = merged[["dep_L1", "arr_L1"]].max(axis=1)
     merged["TimeLimitL2"] = merged[["dep_L2", "arr_L2"]].max(axis=1)
 
-    df_updates = merged[["ConnectionID", "TimeLimitL1", "TimeLimitL2"]]
+    # Apply special non-EU carrier override (vectorized)
+    limits = merged["AirlineCode"].map(SPECIAL_NON_EU_TIME_LIMITS)
 
-    if None in fromCountry.values and None in toCountry.values:
-        airlineCode = df.loc["AirlineCode"]
-        limits = SPECIAL_NON_EU_TIME_LIMITS.get(airlineCode)
-        if limits:
-            log("Special non-EU carrier detected")
-            df_updates = merged[["ConnectionID"]].copy()
-            df_updates["TimeLimitL1"] = limits[0]
-            df_updates["TimeLimitL2"] = limits[1]
+    mask = limits.notna()
+
+    merged.loc[mask, "TimeLimitL1"] = limits[mask].apply(lambda x: x[0])
+    merged.loc[mask, "TimeLimitL2"] = limits[mask].apply(lambda x: x[1])
+
+    df_updates = merged.loc[:, ["ConnectionID", "TimeLimitL1", "TimeLimitL2"]]
 
     log(f"Prepared {len(df_updates):,} updates")
-
     return df_updates
 
 
+# ────────────────────────────────────────────────
+# UPDATE DATABASE
+# ────────────────────────────────────────────────
 def set_time_limits(con: duckdb.DuckDBPyConnection, df_updates: pd.DataFrame):
-    # ── Transactional update ───────────────────────────────
+
+    if df_updates.empty:
+        log("No updates to apply.")
+        return
+
     con.begin()
 
     try:
@@ -195,15 +164,20 @@ def set_time_limits(con: duckdb.DuckDBPyConnection, df_updates: pd.DataFrame):
         raise
 
 
+# ────────────────────────────────────────────────
+# MAIN
+# ────────────────────────────────────────────────
 def main():
     start_time = time.time()
     log(f"Starting at {now_str()}")
 
     con = connect_db()
 
-    __init__(con)
-
     df = get_eu_eligible_data(con)
+
+    if df.empty:
+        con.close()
+        return
 
     df_updates = get_updated_data(df)
 

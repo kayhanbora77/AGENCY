@@ -27,6 +27,7 @@ SPECIAL_NON_EU_CARRIERS = {
     "H2",  # Sky Airline
     "FH",  # Freebird Airlines
     "VF",  # AJet(Anadolu jet)
+    "VS",  # Virgin Atlantic
 }
 
 # Global cached sets (faster lookup)
@@ -148,19 +149,25 @@ class CSVToDBImporter:
         if not temp_legs:
             return False
 
-        dep_eu = is_eu_airport(temp_legs[0]["FromAirport"])
-        arr_eu = is_eu_airport(temp_legs[-1]["ToAirport"])
+        dep_airports = [leg["FromAirport"] for leg in temp_legs]
+        arr_airport = temp_legs[-1]["ToAirport"]
 
-        # Rule 1: Departure from EU → always eligible
-        if dep_eu:
+        # Rule 1: Any departure from EU airport → always eligible
+        if any(is_eu_airport(ap) for ap in dep_airports):
             return True
 
-        # Departure = NON-EU
-        if arr_eu:
-            # Rule 2: NON-EU → EU : at least one EU carrier in the itinerary
-            return any(is_eu_carrier(leg["AirlineCode"]) for leg in temp_legs)
+        # Rule 2: Arrival in EU
+        if is_eu_airport(arr_airport):
+            # Qualify if:
+            # - at least one EU carrier anywhere, OR
+            # - at least one special non-EU carrier (your fallback rule)
+            has_eu_carrier = any(is_eu_carrier(leg["AirlineCode"]) for leg in temp_legs)
+            has_special = any(
+                leg["AirlineCode"] in SPECIAL_NON_EU_CARRIERS for leg in temp_legs
+            )
+            return has_eu_carrier or has_special
 
-        # Rule 3: NON-EU → NON-EU : only if at least one special carrier
+        # Rule 3: Non-EU → Non-EU → only special carriers
         return any(leg["AirlineCode"] in SPECIAL_NON_EU_CARRIERS for leg in temp_legs)
 
     def parse_flight_legs(self, row: pd.Series) -> List[Dict[str, Any]]:

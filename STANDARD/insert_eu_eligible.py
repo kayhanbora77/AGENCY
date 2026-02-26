@@ -18,9 +18,14 @@ MEMORY_LIMIT = "8GB"
 TEMP_DIR = "/tmp/duckdb_temp"
 
 DATABASE_DIR.mkdir(parents=True, exist_ok=True)
+CSV_FILE_PATH = (
+    "/home/kayhan/Desktop/Gelen_Datalar/TRUST_TRAVEL/PROCEED/TRUST_TRAVEL_TARGET_4.csv"
+)
+
 
 SPECIAL_NON_EU_CARRIERS = {
     "BA",  # British Airways
+    "KLM",  # Netherlands
     "TK",  # Turkish Airlines
     "PC",  # Pegasus
     "JU",  # AirSerbian
@@ -35,15 +40,24 @@ EU_AIRPORTS: set = set()
 EU_CARRIERS: set = set()
 
 
-def load_airports(force_refresh=False) -> set:
+def get_connection() -> duckdb.DuckDBPyConnection:
+    con = duckdb.connect(DB_PATH)
+    con.execute(f"SET threads={THREADS}")
+    con.execute(f"SET memory_limit='{MEMORY_LIMIT}'")
+    con.execute("SET preserve_insertion_order=false")
+    con.execute("SET enable_progress_bar=false")
+    con.execute(f"SET temp_directory='{TEMP_DIR}'")
+    return con
+
+
+def load_airports(con, force_refresh=False) -> set:
     global EU_AIRPORTS
     if EU_AIRPORTS and not force_refresh:
         return EU_AIRPORTS
 
     try:
-        with duckdb.connect(DB_PATH, read_only=True) as con:
-            result = con.execute("SELECT CodeIataAirport FROM AIRPORTS").fetchall()
-            EU_AIRPORTS = {r[0].strip().upper() for r in result if r[0]}
+        result = con.execute("SELECT CodeIataAirport FROM AIRPORTS").fetchall()
+        EU_AIRPORTS = {r[0].strip().upper() for r in result if r[0]}
     except Exception as e:
         print(f"Error loading airports: {e}")
         EU_AIRPORTS = set()
@@ -51,17 +65,16 @@ def load_airports(force_refresh=False) -> set:
     return EU_AIRPORTS
 
 
-def load_eu_carriers(force_refresh=False) -> set:
+def load_eu_carriers(con, force_refresh=False) -> set:
     global EU_CARRIERS
     if EU_CARRIERS and not force_refresh:
         return EU_CARRIERS
 
     try:
-        with duckdb.connect(DB_PATH, read_only=True) as con:
-            result = con.execute(
-                "SELECT ICAOCode FROM AIRLINES WHERE IsInUnion = 1"
-            ).fetchall()
-            EU_CARRIERS = {r[0].strip().upper() for r in result if r[0]}
+        result = con.execute(
+            "SELECT ICAOCode FROM AIRLINES WHERE IsInUnion = 1"
+        ).fetchall()
+        EU_CARRIERS = {r[0].strip().upper() for r in result if r[0]}
     except Exception as e:
         print(f"Error loading EU carriers: {e}")
         EU_CARRIERS = set()
@@ -102,18 +115,13 @@ class CSVToDBImporter:
     """Import CSV flight data → DuckDB with EU eligibility rules"""
 
     def __init__(self):
-        # Preload reference data
-        load_airports()
-        load_eu_carriers()
+        Path(TEMP_DIR).mkdir(parents=True, exist_ok=True)
 
-    def get_connection(self) -> duckdb.DuckDBPyConnection:
-        con = duckdb.connect(DB_PATH)
-        con.execute(f"SET threads={THREADS}")
-        con.execute(f"SET memory_limit='{MEMORY_LIMIT}'")
-        con.execute("SET preserve_insertion_order=false")
-        con.execute("SET enable_progress_bar=false")
-        con.execute(f"SET temp_directory='{TEMP_DIR}'")
-        return con
+        self.con = get_connection()
+
+        # preload reference data
+        load_airports(self.con)
+        load_eu_carriers(self.con)
 
     def parse_date(self, value: Any) -> Optional[datetime]:
         if pd.isna(value) or value == "":
@@ -286,18 +294,15 @@ class CSVToDBImporter:
 
         df = pd.DataFrame(records, columns=columns)
 
-        con = self.get_connection()
         try:
-            con.register("tmp_df", df)
-            con.execute(f"""
+            self.con.register("tmp_df", df)
+            self.con.execute(f"""
                 INSERT INTO {table_name} ({", ".join(columns)})
                 SELECT {", ".join(columns)} FROM tmp_df
             """)
             print(f"✓ Inserted {len(df)} records")
         except Exception as e:
             print(f"Insert error: {e}")
-        finally:
-            con.close()
 
     def import_csv(self, csv_path: str):
         print(f"Reading: {csv_path}")
@@ -317,13 +322,17 @@ class CSVToDBImporter:
         self.insert_records(all_records)
 
 
-if __name__ == "__main__":
+def main():
     importer = CSVToDBImporter()
 
-    CSV_FILE = "/home/kayhan/Desktop/Gelen_Datalar/TRUST_TRAVEL/PROCEED/TRUST_TRAVEL_TARGET_4.csv"
-
     try:
-        importer.import_csv(CSV_FILE)
+        importer.import_csv(CSV_FILE_PATH)
         print("✓ Import completed.")
     except Exception as e:
         print(f"❌ Import failed: {e}")
+    finally:
+        importer.con.close()
+
+
+if __name__ == "__main__":
+    main()

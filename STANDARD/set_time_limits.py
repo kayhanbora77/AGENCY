@@ -51,7 +51,7 @@ def now_str() -> str:
     return time.strftime("%Y-%m-%d %H:%M:%S", time.localtime())
 
 
-def connect_db() -> duckdb.DuckDBPyConnection:
+def get_connection() -> duckdb.DuckDBPyConnection:
     con = duckdb.connect(DB_PATH)
     con.execute(f"SET threads TO {THREADS}")
     con.execute(f"SET memory_limit = '{MEMORY_LIMIT}'")
@@ -199,7 +199,7 @@ def main():
     start_time = time.time()
     log(f"Starting at {now_str()}")
 
-    con = connect_db()
+    con = get_connection()
 
     __init__(con)
 

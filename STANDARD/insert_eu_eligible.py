@@ -2,132 +2,83 @@ import duckdb
 import pandas as pd
 from datetime import datetime
 import uuid
-from typing import Dict, List, Any, Optional
+from typing import List, Dict, Any, Optional
 from pathlib import Path
 import os
 import re
 
 # ==================================================
-# CONFIG & CONSTANTS
+# CONFIG
 # ==================================================
 DATABASE_DIR = Path.home() / "my_database"
 DATABASE_NAME = "my_db.duckdb"
 DB_PATH = DATABASE_DIR / DATABASE_NAME
+
 THREADS = 8
 MEMORY_LIMIT = "8GB"
 TEMP_DIR = "/tmp/duckdb_temp"
 
-DATABASE_DIR.mkdir(parents=True, exist_ok=True)
 CSV_FILE_PATH = (
     "/home/kayhan/Desktop/Gelen_Datalar/TRUST_TRAVEL/PROCEED/TRUST_TRAVEL_TARGET_4.csv"
 )
 
+BATCH_SIZE = 50_000
 
-SPECIAL_NON_EU_CARRIERS = {
-    "BA",  # British Airways
-    "KLM",  # Netherlands
-    "TK",  # Turkish Airlines
-    "PC",  # Pegasus
-    "JU",  # AirSerbian
-    "H2",  # Sky Airline
-    "FH",  # Freebird Airlines
-    "VF",  # AJet(Anadolu jet)
-    "VS",  # Virgin Atlantic
-}
+SPECIAL_NON_EU_CARRIERS = {"BA", "KLM", "TK", "PC", "JU", "H2", "FH", "VF", "VS"}
 
-# Global cached sets (faster lookup)
-EU_AIRPORTS: set = set()
-EU_CARRIERS: set = set()
+DATABASE_DIR.mkdir(parents=True, exist_ok=True)
+Path(TEMP_DIR).mkdir(parents=True, exist_ok=True)
 
 
-def get_connection() -> duckdb.DuckDBPyConnection:
-    con = duckdb.connect(DB_PATH)
-    con.execute(f"SET threads={THREADS}")
-    con.execute(f"SET memory_limit='{MEMORY_LIMIT}'")
-    con.execute("SET preserve_insertion_order=false")
-    con.execute("SET enable_progress_bar=false")
-    con.execute(f"SET temp_directory='{TEMP_DIR}'")
-    return con
+# ==================================================
+# REFERENCE DATA
+# ==================================================
+class ReferenceData:
+    def __init__(self, con: duckdb.DuckDBPyConnection):
+        self.eu_airports = self._load_airports(con)
+        self.eu_carriers = self._load_carriers(con)
 
+    def _load_airports(self, con):
+        rows = con.execute("SELECT CodeIataAirport FROM AIRPORTS").fetchall()
+        return {r[0].strip().upper() for r in rows if r[0]}
 
-def load_airports(con, force_refresh=False) -> set:
-    global EU_AIRPORTS
-    if EU_AIRPORTS and not force_refresh:
-        return EU_AIRPORTS
-
-    try:
-        result = con.execute("SELECT CodeIataAirport FROM AIRPORTS").fetchall()
-        EU_AIRPORTS = {r[0].strip().upper() for r in result if r[0]}
-    except Exception as e:
-        print(f"Error loading airports: {e}")
-        EU_AIRPORTS = set()
-
-    return EU_AIRPORTS
-
-
-def load_eu_carriers(con, force_refresh=False) -> set:
-    global EU_CARRIERS
-    if EU_CARRIERS and not force_refresh:
-        return EU_CARRIERS
-
-    try:
-        result = con.execute(
+    def _load_carriers(self, con):
+        rows = con.execute(
             "SELECT ICAOCode FROM AIRLINES WHERE IsInUnion = 1"
         ).fetchall()
-        EU_CARRIERS = {r[0].strip().upper() for r in result if r[0]}
-    except Exception as e:
-        print(f"Error loading EU carriers: {e}")
-        EU_CARRIERS = set()
+        return {r[0].strip().upper() for r in rows if r[0]}
 
-    return EU_CARRIERS
+    def is_eu_airport(self, code: str) -> bool:
+        return (code or "").upper() in self.eu_airports
 
-
-def is_eu_airport(airport: Any) -> bool:
-    if airport is None or pd.isna(airport):
-        return False
-    code = str(airport).upper().strip()
-    return code in EU_AIRPORTS
+    def is_eu_carrier(self, code: str) -> bool:
+        return (code or "").upper() in self.eu_carriers
 
 
-def is_eu_carrier(airline: Any) -> bool:
-    if airline is None or pd.isna(airline):
-        return False
-    code = str(airline).upper().strip()
-    return code in EU_CARRIERS
-
-
-def extract_airline_from_flight_number(flight_number: str) -> str:
-    """
-    Extract IATA airline code (letters + digits).
-    Examples:
-      G31767 -> G3
-      U21234 -> U2
-      4U123  -> 4U
-    """
-    if not flight_number:
-        return ""
-
-    match = re.match(r"^([A-Z0-9]{2})", str(flight_number).upper())
-    return match.group(1) if match else ""
-
-
+# ==================================================
+# IMPORTER
+# ==================================================
 class CSVToDBImporter:
-    """Import CSV flight data → DuckDB with EU eligibility rules"""
-
     def __init__(self):
-        Path(TEMP_DIR).mkdir(parents=True, exist_ok=True)
+        self.con = duckdb.connect(DB_PATH)
+        self.con.execute(f"SET threads={THREADS}")
+        self.con.execute(f"SET memory_limit='{MEMORY_LIMIT}'")
+        self.con.execute("SET preserve_insertion_order=false")
+        self.con.execute("SET enable_progress_bar=false")
+        self.con.execute(f"SET temp_directory='{TEMP_DIR}'")
 
-        self.con = get_connection()
+        self.ref = ReferenceData(self.con)
 
-        # preload reference data
-        load_airports(self.con)
-        load_eu_carriers(self.con)
-
-    def parse_date(self, value: Any) -> Optional[datetime]:
+    # -----------------------------
+    # Utilities
+    # -----------------------------
+    @staticmethod
+    def parse_date(value: Any) -> Optional[datetime]:
         if pd.isna(value) or value == "":
             return None
         if isinstance(value, datetime):
             return value
+
         for fmt in (
             "%Y-%m-%d %H:%M:%S",
             "%Y-%m-%d %H:%M",
@@ -143,129 +94,165 @@ class CSVToDBImporter:
         return None
 
     @staticmethod
-    def read_csv(csv_path: str) -> pd.DataFrame:
-        for sep in ["\t", ",", ";"]:
-            try:
-                df = pd.read_csv(csv_path, sep=sep, encoding="utf-8", low_memory=False)
-                if len(df.columns) > 1:
-                    return df
-            except:
-                continue
-        raise ValueError(f"Could not read CSV file with common separators: {csv_path}")
+    def extract_airline_code(flight_number: str) -> str:
+        if not flight_number:
+            return ""
+        match = re.match(r"^([A-Z0-9]{2})", str(flight_number).upper())
+        return match.group(1) if match else ""
 
-    def determine_eligibility(self, temp_legs: List[Dict[str, Any]]) -> bool:
-        if not temp_legs:
+    # -----------------------------
+    # Eligibility Logic
+    # -----------------------------
+    def determine_eligibility(self, legs: List[Dict[str, Any]]) -> bool:
+
+        if not legs:
             return False
 
-        dep_airports = [leg["FromAirport"] for leg in temp_legs]
-        arr_airport = temp_legs[-1]["ToAirport"]
+        dep_airports = [l["FromAirport"] for l in legs]
+        final_arrival = legs[-1]["ToAirport"]
 
-        # Rule 1: Any departure from EU airport → always eligible
-        if any(is_eu_airport(ap) for ap in dep_airports):
+        # Rule 1
+        if any(self.ref.is_eu_airport(ap) for ap in dep_airports):
             return True
 
-        # Rule 2: Arrival in EU
-        if is_eu_airport(arr_airport):
-            # Qualify if:
-            # - at least one EU carrier anywhere, OR
-            # - at least one special non-EU carrier (your fallback rule)
-            has_eu_carrier = any(is_eu_carrier(leg["AirlineCode"]) for leg in temp_legs)
-            has_special = any(
-                leg["AirlineCode"] in SPECIAL_NON_EU_CARRIERS for leg in temp_legs
-            )
-            return has_eu_carrier or has_special
+        # Rule 2
+        if self.ref.is_eu_airport(final_arrival):
+            has_eu = any(self.ref.is_eu_carrier(l["AirlineCode"]) for l in legs)
+            has_special = any(l["AirlineCode"] in SPECIAL_NON_EU_CARRIERS for l in legs)
+            return has_eu or has_special
 
-        # Rule 3: Non-EU → Non-EU → only special carriers
-        return any(leg["AirlineCode"] in SPECIAL_NON_EU_CARRIERS for leg in temp_legs)
+        # Rule 3
+        return any(l["AirlineCode"] in SPECIAL_NON_EU_CARRIERS for l in legs)
 
-    def parse_flight_legs(self, row: pd.Series) -> List[Dict[str, Any]]:
+    # -----------------------------
+    # CSV Processing
+    # -----------------------------
+    def import_csv(self, path: str):
 
-        flight_no_cols = [
+        df = self._read_csv(path)
+        filename = os.path.basename(path)
+
+        flight_cols = [
             c
-            for c in row.index
-            if re.match(r"^Flight(?:No|Number)(\d+)$", str(c), re.IGNORECASE)
+            for c in df.columns
+            if re.match(r"^Flight(?:No|Number)\d+$", c, re.IGNORECASE)
         ]
-        # flight_no_cols.sort(key=lambda c: int(re.search(r"\d+$", c).group()))
 
-        if not flight_no_cols:
-            return []
+        batch = []
+        total = 0
 
-        temp_legs = []
+        for row in df.itertuples(index=False):
+            legs = self._parse_row(row, flight_cols)
 
-        for i, flight_col in enumerate(flight_no_cols, 1):
-            flight_no = row.get(flight_col)
-            if pd.isna(flight_no) or str(flight_no).strip() == "":
-                break
+            for leg in legs:
+                leg["FileName"] = filename
+
+            batch.extend(legs)
+
+            if len(batch) >= BATCH_SIZE:
+                self._insert(batch)
+                total += len(batch)
+                batch.clear()
+
+        if batch:
+            self._insert(batch)
+            total += len(batch)
+
+        print(f"✓ Total inserted: {total:,}")
+
+    # -----------------------------
+    # Row Parsing
+    # -----------------------------
+    def _parse_row(self, row, flight_cols):
+
+        legs = []
+
+        for i, col in enumerate(flight_cols, 1):
+            flight_no = getattr(row, col, None)
+            if not flight_no:
+                continue
 
             flight_date = self.parse_date(
-                row.get(f"FlightDate{i}")
-                or row.get(f"DepartureDateLocal{i}")
-                or row.get(f"DepartureDate{i}")
+                getattr(row, f"FlightDate{i}", None)
+                or getattr(row, f"DepartureDateLocal{i}", None)
+                or getattr(row, f"DepartureDate{i}", None)
             )
-
-            from_airport = row.get(f"Airport{i}")
-            to_airport = row.get(f"Airport{i + 1}")
+            if flight_date is None:
+                continue
+            from_airport = getattr(row, f"Airport{i}", None)
+            to_airport = getattr(row, f"Airport{i + 1}", None)
 
             if not from_airport or not to_airport:
                 continue
 
-            flight_number_clean = str(flight_no).replace(" ", "").upper()
+            flight_number = str(flight_no).replace(" ", "").upper()
+            airline = getattr(row, "IATA", None) or self.extract_airline_code(
+                flight_number
+            )
 
-            # Try to get airline from specific column, otherwise extract from flight number
-            airline_code = str(row.get("IATA") or "").strip().upper()
-            if not airline_code:
-                airline_code = extract_airline_from_flight_number(flight_number_clean)
-
-            temp_legs.append(
+            legs.append(
                 {
-                    "FlightNumber": flight_number_clean,
+                    "FlightNumber": flight_number,
                     "DepartureDate": flight_date,
                     "FromAirport": str(from_airport).upper().strip(),
                     "ToAirport": str(to_airport).upper().strip(),
-                    "AirlineCode": airline_code,
+                    "AirlineCode": airline,
                     "LegNo": i,
                 }
             )
 
-        if not temp_legs:
+        if not legs:
             return []
 
-        eligible = self.determine_eligibility(temp_legs)
-
+        eligible = self.determine_eligibility(legs)
         connection_id = str(uuid.uuid4())
-        final_airport = temp_legs[-1]["ToAirport"]
-        eticket = str(row.get("TicketNumber") or row.get("ETicketNo") or "")
-        pax_name = str(
-            row.get("PaxName") or row.get("PassengerName") or row.get("Name") or ""
+        final_airport = legs[-1]["ToAirport"]
+        eticket = str(
+            getattr(row, "TicketNumber", None) or getattr(row, "ETicketNo", None) or ""
         )
-        final_legs = []
+        pax_name = str(
+            getattr(row, "PaxName", None)
+            or getattr(row, "PassengerName", None)
+            or getattr(row, "Name", None)
+            or ""
+        )
+        booking_ref = (
+            getattr(row, "PNR", None)
+            or getattr(row, "PNRNo", None)
+            or getattr(row, "BookingRef", None)
+        )
+        records = []
+        for leg in legs:
+            records.append(
+                {
+                    "Id": str(uuid.uuid4()),
+                    "ConnectionID": connection_id,
+                    "PaxName": pax_name,
+                    "AgencyRefNumber": None,
+                    "ETicketNo": eticket,
+                    "FlightNumber": leg["FlightNumber"],
+                    "DepartureDate": leg["DepartureDate"],
+                    "FileName": None,  # filled later
+                    "BookingRef": booking_ref,
+                    "AirlineCode": leg["AirlineCode"],
+                    "FromAirport": leg["FromAirport"],
+                    "ToAirport": leg["ToAirport"],
+                    "LastLegAirport": final_airport,
+                    "EUEligible": eligible,
+                    "EUEligibleDuration": 0,
+                    "ExtraNote": None,
+                    "FlightFound": False,
+                    "LegNo": leg["LegNo"],
+                }
+            )
 
-        for leg in temp_legs:
-            record = {
-                "Id": str(uuid.uuid4()),
-                "ConnectionID": connection_id,
-                "PaxName": pax_name,
-                "AgencyRefNumber": None,
-                "ETicketNo": eticket,
-                "FlightNumber": leg["FlightNumber"],
-                "DepartureDate": leg["DepartureDate"],
-                "FileName": None,  # filled later
-                "BookingRef": row.get("PNR"),
-                "AirlineCode": leg["AirlineCode"],
-                "FromAirport": leg["FromAirport"],
-                "ToAirport": leg["ToAirport"],
-                "LastLegAirport": final_airport,
-                "EUEligible": eligible,
-                "EUEligibleDuration": 0,
-                "ExtraNote": None,
-                "FlightFound": False,
-                "LegNo": leg["LegNo"],
-            }
-            final_legs.append(record)
+        return records
 
-        return final_legs
+    # -----------------------------
+    # Insert
+    # -----------------------------
+    def _insert(self, records):
 
-    def insert_records(self, records: List[Dict[str, Any]]):
         if not records:
             print("⚠️  No records to insert")
             return
@@ -304,32 +291,30 @@ class CSVToDBImporter:
         except Exception as e:
             print(f"Insert error: {e}")
 
-    def import_csv(self, csv_path: str):
-        print(f"Reading: {csv_path}")
-        df = self.read_csv(csv_path)
-        print(f"Rows: {len(df):,}")
+    # -----------------------------
+    # CSV Reader
+    # -----------------------------
+    @staticmethod
+    def _read_csv(path):
 
-        filename = os.path.basename(csv_path)
-        all_records = []
+        for sep in ["\t", ",", ";"]:
+            try:
+                df = pd.read_csv(path, sep=sep, encoding="utf-8", low_memory=False)
+                if len(df.columns) > 1:
+                    return df
+            except:
+                continue
 
-        for _, row in df.iterrows():
-            legs = self.parse_flight_legs(row)
-            for leg in legs:
-                leg["FileName"] = filename
-            all_records.extend(legs)
-
-        print(f"Flight legs parsed: {len(all_records):,}")
-        self.insert_records(all_records)
+        raise ValueError("Could not detect CSV separator")
 
 
+# ==================================================
+# MAIN
+# ==================================================
 def main():
     importer = CSVToDBImporter()
-
     try:
         importer.import_csv(CSV_FILE_PATH)
-        print("✓ Import completed.")
-    except Exception as e:
-        print(f"❌ Import failed: {e}")
     finally:
         importer.con.close()
 

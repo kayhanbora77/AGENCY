@@ -24,7 +24,7 @@ CSV_FILE_PATH = (
 
 BATCH_SIZE = 50_000
 
-SPECIAL_NON_EU_CARRIERS = {"BA", "KLM", "TK", "PC", "JU", "H2", "FH", "VF", "VS"}
+SPECIAL_NON_EU_CARRIERS = {"BA", "TK", "PC", "JU", "H2", "FH", "VF", "VS"}
 
 DATABASE_DIR.mkdir(parents=True, exist_ok=True)
 Path(TEMP_DIR).mkdir(parents=True, exist_ok=True)

@@ -100,6 +100,43 @@ class CSVToDBImporter:
         match = re.match(r"^([A-Z0-9]{2})", str(flight_number).upper())
         return match.group(1) if match else ""
 
+    def determine_eligibility2(self, legs: List[Dict[str, Any]]) -> bool:
+        if not legs:
+            return False
+
+        leg_dep_airport = legs[0]["FromAirport"]
+        leg_arr_airport = legs[-1]["ToAirport"]
+        eu_departure = self.ref.is_eu_airport(leg_dep_airport)
+        eu_arrival = self.ref.is_eu_airport(leg_arr_airport)
+
+        if eu_departure is True:
+            return True
+        if eu_departure is False and eu_arrival is False:
+            for leg in legs:
+                if leg["AirlineCode"] in SPECIAL_NON_EU_CARRIERS:
+                    return True
+            return False
+        if eu_departure is False:  # and eu_arrival is True:
+            for leg in legs:
+                dep_airport = leg["FromAirport"]
+                arr_airport = leg["ToAirport"]
+                if self.ref.is_eu_airport(dep_airport):
+                    return True
+                if (
+                    self.ref.is_eu_airport(dep_airport) is False
+                    and self.ref.is_eu_airport(arr_airport) is True
+                    and (
+                        self.ref.is_eu_carrier(
+                            leg["AirlineCode"]
+                            or leg["AirlineCode"] in SPECIAL_NON_EU_CARRIERS
+                        )
+                    )
+                ):
+                    return True
+                if leg["AirlineCode"] in SPECIAL_NON_EU_CARRIERS:
+                    return True
+            return False
+
     # -----------------------------
     # Eligibility Logic
     # -----------------------------
@@ -204,7 +241,8 @@ class CSVToDBImporter:
         if not legs:
             return []
 
-        eligible = self.determine_eligibility(legs)
+        # eligible = self.determine_eligibility(legs)
+        eligible = self.determine_eligibility2(legs)
         connection_id = str(uuid.uuid4())
         final_airport = legs[-1]["ToAirport"]
         eticket = str(

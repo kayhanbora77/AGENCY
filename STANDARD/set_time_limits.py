@@ -80,23 +80,32 @@ def get_eu_eligible_data(con: duckdb.DuckDBPyConnection) -> pd.DataFrame | None:
     log("Loading EU eligible data...")
 
     query = """
-        SELECT
+            SELECT 
+            t.Id,
             t.ConnectionID,
-            t.LegNo,
             t.AirlineCode,
-            dep.NameCountry AS FromCountry,
-            arr.NameCountry AS ToCountry,
-            COALESCE(fromL1.LimitationYears, 0) AS fromL1,
-            COALESCE(toL1.LimitationYears, 0) AS toL1,
-            COALESCE(fromL2.LimitationYears, 0) AS fromL2,
-            COALESCE(toL2.LimitationYears, 0) AS toL2
+            t.FromAirport,
+            t.ToAirport,
+            depAirport.NameCountry AS depCountry,
+            arrAirport.NameCountry AS arrCountry,
+            COALESCE(depL1.LimitationYears, 0) AS depL1,
+            COALESCE(arrL1.LimitationYears, 0) AS arrL1,
+            COALESCE(depL2.LimitationYears, 0) AS depL2,
+            COALESCE(arrL2.LimitationYears, 0) AS arrL2,            
+            t.LegNo
         FROM TA_STANDARD_TEMPLATE t
-        LEFT JOIN AIRPORTS dep ON t.FromAirport = dep.CodeIataAirport
-        LEFT JOIN AIRPORTS arr ON t.ToAirport = arr.CodeIataAirport
-        LEFT JOIN TIME_LIMITL1 fromL1 ON dep.NameCountry = fromL1.Country
-        LEFT JOIN TIME_LIMITL1 toL1 ON arr.NameCountry = toL1.Country
-        LEFT JOIN TIME_LIMITL2 fromL2 ON dep.NameCountry = fromL2.Country
-        LEFT JOIN TIME_LIMITL2 toL2 ON arr.NameCountry = toL2.Country
+        LEFT JOIN AIRPORTS depAirport
+            ON t.FromAirport = depAirport.CodeIataAirport
+        LEFT JOIN AIRPORTS arrAirport
+            ON t.ToAirport = arrAirport.CodeIataAirport
+        LEFT JOIN TIME_LIMITL1 depL1
+            ON depAirport.NameCountry = depL1.Country
+        LEFT JOIN TIME_LIMITL1 arrL1
+            ON arrAirport.NameCountry = arrL1.Country
+        LEFT JOIN TIME_LIMITL2 depL2
+            ON depAirport.NameCountry = depL2.Country
+        LEFT JOIN TIME_LIMITL2 arrL2
+            ON arrAirport.NameCountry = arrL2.Country                
         WHERE t.EUEligible IS TRUE
         ORDER BY t.ConnectionID, t.LegNo
     """
@@ -119,7 +128,7 @@ def get_updated_data(df: pd.DataFrame) -> pd.DataFrame:
     df = df.sort_values(["ConnectionID", "LegNo"], ignore_index=True)
 
     # Safe numeric conversion
-    num_cols = ["fromL1", "toL1", "fromL2", "toL2"]
+    num_cols = ["depL1", "arrL1", "depL2", "arrL2"]
     df[num_cols] = (
         df[num_cols].apply(pd.to_numeric, errors="coerce").fillna(0).astype("int32")
     )
@@ -128,12 +137,12 @@ def get_updated_data(df: pd.DataFrame) -> pd.DataFrame:
 
     # Aggregate per connection
     agg = df.groupby("ConnectionID", as_index=False).agg(
-        dep_L1=("fromL1", "first"),
-        dep_L2=("fromL2", "first"),
-        arr_L1=("toL1", "last"),
-        arr_L2=("toL2", "last"),
-        FromCountry=("FromCountry", "first"),
-        ToCountry=("ToCountry", "last"),
+        dep_L1=("depL1", "first"),
+        dep_L2=("depL2", "first"),
+        arr_L1=("arrL1", "last"),
+        arr_L2=("arrL2", "last"),
+        DepCountry=("depCountry", "first"),
+        ArrCountry=("arrCountry", "last"),
         AirlineCode=("AirlineCode", "first"),
     )
 
@@ -141,18 +150,17 @@ def get_updated_data(df: pd.DataFrame) -> pd.DataFrame:
     agg["TimeLimitL1"] = agg[["dep_L1", "arr_L1"]].max(axis=1)
     agg["TimeLimitL2"] = agg[["dep_L2", "arr_L2"]].max(axis=1)
 
-    mask_from_missing = agg["FromCountry"].isna() & agg["ToCountry"].notna()
-    mask_to_missing = agg["FromCountry"].notna() & agg["ToCountry"].isna()
+    mask_dep_missing = agg["DepCountry"].isna() & agg["ArrCountry"].notna()
+    mask_arr_missing = agg["DepCountry"].notna() & agg["ArrCountry"].isna()
+    both_missing = agg["DepCountry"].isna() & agg["ArrCountry"].isna()
+    if mask_dep_missing.any():
+        agg.loc[mask_dep_missing, "TimeLimitL1"] = agg.loc[mask_dep_missing, "arr_L1"]
+        agg.loc[mask_dep_missing, "TimeLimitL2"] = agg.loc[mask_dep_missing, "arr_L2"]
 
-    if mask_from_missing.any():
-        agg.loc[mask_from_missing, "TimeLimitL1"] = agg.loc[mask_from_missing, "arr_L1"]
-        agg.loc[mask_from_missing, "TimeLimitL2"] = agg.loc[mask_from_missing, "arr_L2"]
-
-    if mask_to_missing.any():
-        agg.loc[mask_to_missing, "TimeLimitL1"] = agg.loc[mask_to_missing, "dep_L1"]
-        agg.loc[mask_to_missing, "TimeLimitL2"] = agg.loc[mask_to_missing, "dep_L2"]
+    if mask_arr_missing.any():
+        agg.loc[mask_arr_missing, "TimeLimitL1"] = agg.loc[mask_arr_missing, "dep_L1"]
+        agg.loc[mask_arr_missing, "TimeLimitL2"] = agg.loc[mask_arr_missing, "dep_L2"]
         # Special override logic
-        both_missing = agg["FromCountry"].isna() & agg["ToCountry"].isna()
 
     if both_missing.any():
         log(f"Found {both_missing.sum():,} connections with both countries missing")
@@ -219,7 +227,7 @@ def main():
     log("Starting process")
 
     con = connect_db()
-    init_db(con)
+    # init_db(con)
 
     df = get_eu_eligible_data(con)
 

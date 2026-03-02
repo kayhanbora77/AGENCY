@@ -100,7 +100,7 @@ class CSVToDBImporter:
         match = re.match(r"^([A-Z0-9]{2})", str(flight_number).upper())
         return match.group(1) if match else ""
 
-    def determine_eligibility2(self, legs: List[Dict[str, Any]]) -> bool:
+    def determine_eligibility(self, legs: List[Dict[str, Any]]) -> bool:
         if not legs:
             return False
 
@@ -136,30 +136,6 @@ class CSVToDBImporter:
                 if leg["AirlineCode"] in SPECIAL_NON_EU_CARRIERS:
                     return True
             return False
-
-    # -----------------------------
-    # Eligibility Logic
-    # -----------------------------
-    def determine_eligibility(self, legs: List[Dict[str, Any]]) -> bool:
-
-        if not legs:
-            return False
-
-        dep_airports = [l["FromAirport"] for l in legs]
-        final_arrival = legs[-1]["ToAirport"]
-
-        # Rule 1
-        if any(self.ref.is_eu_airport(ap) for ap in dep_airports):
-            return True
-
-        # Rule 2
-        if self.ref.is_eu_airport(final_arrival):
-            has_eu = any(self.ref.is_eu_carrier(l["AirlineCode"]) for l in legs)
-            has_special = any(l["AirlineCode"] in SPECIAL_NON_EU_CARRIERS for l in legs)
-            return has_eu or has_special
-
-        # Rule 3
-        return any(l["AirlineCode"] in SPECIAL_NON_EU_CARRIERS for l in legs)
 
     # -----------------------------
     # CSV Processing
@@ -241,8 +217,7 @@ class CSVToDBImporter:
         if not legs:
             return []
 
-        # eligible = self.determine_eligibility(legs)
-        eligible = self.determine_eligibility2(legs)
+        eligible = self.determine_eligibility(legs)
         connection_id = str(uuid.uuid4())
         final_airport = legs[-1]["ToAirport"]
         eticket = str(

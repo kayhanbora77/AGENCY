@@ -1,10 +1,10 @@
 import time
+import tempfile
 from pathlib import Path
+from typing import Optional
 
 import duckdb
 import pandas as pd
-import numpy as np
-from typing import Any
 
 # ────────────────────────────────────────────────
 # CONFIG
@@ -15,22 +15,11 @@ DB_PATH = DATABASE_DIR / DATABASE_NAME
 
 THREADS = 4
 MEMORY_LIMIT = "6GB"
-TEMP_DIR = "/tmp/duckdb_temp"
+TEMP_DIR = Path(tempfile.gettempdir()) / "duckdb_temp"
 
-# Global cached set (faster lookup)
-EU_AIRPORTS: set = set()
-
-SPECIAL_NON_EU_CARRIERS = {
-    "BA",  # British Airways
-    "TK",  # Turkish Airlines
-    "PC",  # Pegasus
-    "JU",  # AirSerbian
-    "H2",  # Sky Airline
-    "FH",  # Freebird Airlines
-    "VF",  # AJet (AnadoluJet)
-    "VS",  # Virgin Atlantic
-}
-
+# ────────────────────────────────────────────────
+# CONSTANTS
+# ────────────────────────────────────────────────
 SPECIAL_NON_EU_TIME_LIMITS = {
     "BA": (6, 6),
     "TK": (2, 2),
@@ -43,74 +32,59 @@ SPECIAL_NON_EU_TIME_LIMITS = {
 }
 
 
+# ────────────────────────────────────────────────
+# UTILITIES
+# ────────────────────────────────────────────────
 def log(msg: str) -> None:
     print(f"[{time.strftime('%Y-%m-%d %H:%M:%S')}] {msg}", flush=True)
 
 
-def connect_db() -> duckdb.DuckDBPyConnection:
+def get_connection() -> duckdb.DuckDBPyConnection:
+    TEMP_DIR.mkdir(parents=True, exist_ok=True)
+
     con = duckdb.connect(DB_PATH)
-    con.execute(f"SET threads TO {THREADS}")
+    con.execute(f"SET threads = {THREADS}")
     con.execute(f"SET memory_limit = '{MEMORY_LIMIT}'")
     con.execute("SET preserve_insertion_order = false")
     con.execute(f"SET temp_directory = '{TEMP_DIR}'")
     return con
 
 
-def load_airports(con: duckdb.DuckDBPyConnection, force_refresh: bool = False) -> set:
-    global EU_AIRPORTS
-    if EU_AIRPORTS and not force_refresh:
-        return EU_AIRPORTS
-
-    try:
-        result = con.execute("SELECT CodeIataAirport FROM AIRPORTS").fetchall()
-        EU_AIRPORTS = {r[0].strip().upper() for r in result if r[0]}
-        log(f"Loaded {len(EU_AIRPORTS):,} EU airport codes")
-    except Exception as e:
-        log(f"Error loading airports: {e}")
-        EU_AIRPORTS = set()
-
-    return EU_AIRPORTS
-
-
-def init_db(con: duckdb.DuckDBPyConnection):
-    load_airports(con)
-
-
-def get_eu_eligible_data(con: duckdb.DuckDBPyConnection) -> pd.DataFrame | None:
+# ────────────────────────────────────────────────
+# DATA LOADING
+# ────────────────────────────────────────────────
+def get_eu_eligible_data(con: duckdb.DuckDBPyConnection) -> Optional[pd.DataFrame]:
     log("Loading EU eligible data...")
 
     query = """
-            SELECT 
-            t.Id,
+        SELECT
             t.ConnectionID,
             t.AirlineCode,
-            t.FromAirport,
-            t.ToAirport,
             depAirport.NameCountry AS depCountry,
             arrAirport.NameCountry AS arrCountry,
-            COALESCE(depL1.LimitationYears, 0) AS depL1,
-            COALESCE(arrL1.LimitationYears, 0) AS arrL1,
-            COALESCE(depL2.LimitationYears, 0) AS depL2,
-            COALESCE(arrL2.LimitationYears, 0) AS arrL2,            
+            COALESCE(depLimits.LimitL1, 0) AS depL1,
+            COALESCE(depLimits.LimitL2, 0) AS depL2,
+            COALESCE(arrLimits.LimitL1, 0) AS arrL1,
+            COALESCE(arrLimits.LimitL2, 0) AS arrL2,
             t.LegNo
         FROM TA_STANDARD_TEMPLATE t
         LEFT JOIN AIRPORTS depAirport
             ON t.FromAirport = depAirport.CodeIataAirport
         LEFT JOIN AIRPORTS arrAirport
             ON t.ToAirport = arrAirport.CodeIataAirport
-        LEFT JOIN TIME_LIMITL1 depL1
-            ON depAirport.NameCountry = depL1.Country
-        LEFT JOIN TIME_LIMITL1 arrL1
-            ON arrAirport.NameCountry = arrL1.Country
-        LEFT JOIN TIME_LIMITL2 depL2
-            ON depAirport.NameCountry = depL2.Country
-        LEFT JOIN TIME_LIMITL2 arrL2
-            ON arrAirport.NameCountry = arrL2.Country                
+        LEFT JOIN TIME_LIMITS depLimits
+            ON depAirport.NameCountry = depLimits.Country
+        LEFT JOIN TIME_LIMITS arrLimits
+            ON arrAirport.NameCountry = arrLimits.Country
         WHERE t.EUEligible IS TRUE
         ORDER BY t.ConnectionID, t.LegNo
     """
 
-    df = con.execute(query).df()
+    try:
+        df = con.execute(query).df()
+    except Exception as e:
+        log(f"Error fetching data: {e}")
+        return None
 
     if df.empty:
         log("No EU eligible records found.")
@@ -120,20 +94,21 @@ def get_eu_eligible_data(con: duckdb.DuckDBPyConnection) -> pd.DataFrame | None:
     return df
 
 
-def get_updated_data(df: pd.DataFrame) -> pd.DataFrame:
-    if df is None or df.empty:
+# ────────────────────────────────────────────────
+# BUSINESS LOGIC
+# ────────────────────────────────────────────────
+def calculate_timelimits(df: pd.DataFrame) -> pd.DataFrame:
+    if df.empty:
         return pd.DataFrame(columns=["ConnectionID", "TimeLimitL1", "TimeLimitL2"])
 
-    # Ensure correct order
-    df = df.sort_values(["ConnectionID", "LegNo"], ignore_index=True)
-
-    # Safe numeric conversion
-    num_cols = ["depL1", "arrL1", "depL2", "arrL2"]
-    df[num_cols] = (
-        df[num_cols].apply(pd.to_numeric, errors="coerce").fillna(0).astype("int32")
-    )
-
     log("Computing time limits per connection...")
+
+    # Ensure deterministic order before groupby
+    df = df.sort_values(["ConnectionID", "LegNo"])
+
+    # Cast numeric columns
+    num_cols = ["depL1", "arrL1", "depL2", "arrL2"]
+    df[num_cols] = df[num_cols].astype("int32")
 
     # Aggregate per connection
     agg = df.groupby("ConnectionID", as_index=False).agg(
@@ -150,58 +125,31 @@ def get_updated_data(df: pd.DataFrame) -> pd.DataFrame:
     agg["TimeLimitL1"] = agg[["dep_L1", "arr_L1"]].max(axis=1)
     agg["TimeLimitL2"] = agg[["dep_L2", "arr_L2"]].max(axis=1)
 
-    mask_dep_missing = agg["DepCountry"].isna() & agg["ArrCountry"].notna()
-    mask_arr_missing = agg["DepCountry"].notna() & agg["ArrCountry"].isna()
-    both_missing = agg["DepCountry"].isna() & agg["ArrCountry"].isna()
-    if mask_dep_missing.any():
-        agg.loc[mask_dep_missing, "TimeLimitL1"] = agg.loc[mask_dep_missing, "arr_L1"]
-        agg.loc[mask_dep_missing, "TimeLimitL2"] = agg.loc[mask_dep_missing, "arr_L2"]
+    # Special carrier override (vectorized)
+    mask_missing = agg["DepCountry"].isna() & agg["ArrCountry"].isna()
+    mask_special = mask_missing & agg["AirlineCode"].isin(SPECIAL_NON_EU_TIME_LIMITS)
 
-    if mask_arr_missing.any():
-        agg.loc[mask_arr_missing, "TimeLimitL1"] = agg.loc[mask_arr_missing, "dep_L1"]
-        agg.loc[mask_arr_missing, "TimeLimitL2"] = agg.loc[mask_arr_missing, "dep_L2"]
-        # Special override logic
-
-    if both_missing.any():
-        log(f"Found {both_missing.sum():,} connections with both countries missing")
-
-        special_mask = both_missing & agg["AirlineCode"].isin(
-            SPECIAL_NON_EU_TIME_LIMITS.keys()
+    if mask_special.any():
+        mapped = agg.loc[mask_special, "AirlineCode"].map(SPECIAL_NON_EU_TIME_LIMITS)
+        agg.loc[mask_special, ["TimeLimitL1", "TimeLimitL2"]] = pd.DataFrame(
+            mapped.tolist(), index=agg.loc[mask_special].index
         )
 
-        if special_mask.any():
-            log(
-                f" → Overriding {special_mask.sum():,} connections with special carrier limits"
-            )
-
-            # Extract codes as numpy array (fast & safe)
-            codes = agg.loc[special_mask, "AirlineCode"].values
-
-            # Create numpy arrays of integers (this avoids pandas Series/index problems)
-            l1_arr = np.array(
-                [SPECIAL_NON_EU_TIME_LIMITS[c][0] for c in codes], dtype=np.int32
-            )
-            l2_arr = np.array(
-                [SPECIAL_NON_EU_TIME_LIMITS[c][1] for c in codes], dtype=np.int32
-            )
-
-            # Assign using plain numpy arrays → very reliable
-            agg.loc[special_mask, "TimeLimitL1"] = l1_arr
-            agg.loc[special_mask, "TimeLimitL2"] = l2_arr
-
-    df_updates = agg[["ConnectionID", "TimeLimitL1", "TimeLimitL2"]]
-
-    log(f"Prepared {len(df_updates):,} updates")
-    return df_updates
+    return agg[["ConnectionID", "TimeLimitL1", "TimeLimitL2"]]
 
 
-def set_time_limits(con: duckdb.DuckDBPyConnection, df_updates: pd.DataFrame):
+# ────────────────────────────────────────────────
+# DATABASE UPDATE
+# ────────────────────────────────────────────────
+def set_time_limits(con: duckdb.DuckDBPyConnection, df_updates: pd.DataFrame) -> None:
     if df_updates.empty:
         log("No updates to apply")
         return
 
-    con.begin()
+    log(f"Updating {len(df_updates):,} connections...")
+
     try:
+        con.execute("BEGIN")
         con.register("temp_updates", df_updates)
 
         con.execute("""
@@ -214,11 +162,12 @@ def set_time_limits(con: duckdb.DuckDBPyConnection, df_updates: pd.DataFrame):
         """)
 
         con.unregister("temp_updates")
-        con.commit()
-        log(f"Batch UPDATE completed successfully ({len(df_updates):,} rows)")
-    except Exception as e:
-        con.rollback()
-        log(f"UPDATE failed: {e}")
+        con.execute("COMMIT")
+        log("Batch UPDATE completed successfully")
+
+    except Exception:
+        con.execute("ROLLBACK")
+        log("UPDATE failed — transaction rolled back")
         raise
 
 
@@ -226,24 +175,25 @@ def main():
     start_time = time.time()
     log("Starting process")
 
-    con = connect_db()
-    # init_db(con)
+    con = get_connection()
 
-    df = get_eu_eligible_data(con)
+    try:
+        df = get_eu_eligible_data(con)
 
-    if df is not None:
-        df_updates = get_updated_data(df)
-        set_time_limits(con, df_updates)
+        if df is not None:
+            df_updates = calculate_timelimits(df)
+            set_time_limits(con, df_updates)
 
-        elapsed = time.time() - start_time
-        log("──────────── DONE ────────────")
-        log(f"Updated {len(df_updates):,} connections")
-        log(f"Processed {len(df):,} legs")
-        log(f"Finished in {elapsed:.2f} seconds")
-    else:
-        log("No data to process")
+            log("──────────── DONE ────────────")
+            log(f"Updated {len(df_updates):,} connections")
+            log(f"Processed {len(df):,} legs")
+            log(f"Finished in {time.time() - start_time:.2f} seconds")
+        else:
+            log("No data to process")
 
-    con.close()
+    finally:
+        # Ensure the connection closes even if an error occurs
+        con.close()
 
 
 if __name__ == "__main__":

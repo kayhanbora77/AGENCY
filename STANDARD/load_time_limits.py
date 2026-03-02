@@ -15,7 +15,7 @@ THREADS = 4
 MEMORY_LIMIT = "6GB"
 TEMP_DIR = "/tmp/duckdb_temp"
 EXCEL_DIR = Path("/home/kayhan/Desktop/EU_Eligible/")
-TABLE_NAME = "TIME_LIMITL1"
+TABLE_NAME = "TIME_LIMITS"
 
 
 def log(msg: str) -> None:

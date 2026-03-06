@@ -60,6 +60,7 @@ def get_eu_eligible_data(con: duckdb.DuckDBPyConnection) -> Optional[pd.DataFram
         SELECT
             t.ConnectionID,
             t.AirlineCode,
+            strftime(t.DepartureDate, '%Y-%m-%d') AS DepartureDate,
             depAirport.NameCountry AS depCountry,
             arrAirport.NameCountry AS arrCountry,
             COALESCE(depLimits.LimitL1, 0) AS depL1,
@@ -97,6 +98,121 @@ def get_eu_eligible_data(con: duckdb.DuckDBPyConnection) -> Optional[pd.DataFram
 # ────────────────────────────────────────────────
 # BUSINESS LOGIC
 # ────────────────────────────────────────────────
+def calculate_timelimits_vectorized(df: pd.DataFrame) -> pd.DataFrame:
+    # 1. Ensure numeric columns are floats to avoid 'LossySetitemError' during assignment
+    num_cols = ["depL1", "arrL1", "depL2", "arrL2"]
+    df[num_cols] = (
+        df[num_cols].apply(pd.to_numeric, errors="coerce").fillna(0).astype(float)
+    )
+
+    # Get the max limits per connection
+    agg = df.groupby("ConnectionID").agg(
+        {
+            "depL1": "max",
+            "arrL1": "max",
+            "depL2": "max",
+            "arrL2": "max",
+            "DepartureDate": "min",
+        }
+    )
+
+    agg["limitL1"] = agg[["depL1", "arrL1"]].max(axis=1)
+    agg["limitL2"] = agg[["depL2", "arrL2"]].max(axis=1)
+
+    # 2. Identify connections with NO airport limits
+    needs_special = (agg["limitL1"] == 0) & (agg["limitL2"] == 0)
+
+    if needs_special.any():
+        # Use .copy() to avoid SettingWithCopy warnings on the original df
+        df_special = df[["ConnectionID", "AirlineCode"]].copy()
+        df_special["spec"] = df_special["AirlineCode"].map(SPECIAL_NON_EU_TIME_LIMITS)
+
+        # Extract values into float columns
+        df_special["sL1"] = df_special["spec"].apply(
+            lambda x: float(x[0]) if isinstance(x, tuple) else 0.0
+        )
+        df_special["sL2"] = df_special["spec"].apply(
+            lambda x: float(x[1]) if isinstance(x, tuple) else 0.0
+        )
+
+        # Get the max special limit per connection
+        special_max = df_special.groupby("ConnectionID")[["sL1", "sL2"]].max()
+
+        # Update the aggregate table
+        # .loc with .values ensures we are passing the raw data without index misalignment issues
+        agg.loc[needs_special, "limitL1"] = special_max.loc[
+            needs_special[needs_special].index, "sL1"
+        ]
+        agg.loc[needs_special, "limitL2"] = special_max.loc[
+            needs_special[needs_special].index, "sL2"
+        ]
+
+    # 3. Final comparison
+    april_target = pd.to_datetime("2026-04-01")
+    # Ensure DepartureDate is datetime
+    agg_dep_dates = pd.to_datetime(agg["DepartureDate"])
+    diff_years = (april_target - agg_dep_dates).dt.days / 365.25
+
+    agg["IsTimeLimitL1"] = agg["limitL1"] >= diff_years
+    agg["IsTimeLimitL2"] = agg["limitL2"] >= diff_years
+
+    return agg.reset_index()[["ConnectionID", "IsTimeLimitL1", "IsTimeLimitL2"]]
+
+
+def check_if_timelimit_is_met(df: pd.DataFrame) -> pd.DataFrame:
+    if df is None or df.empty:
+        return pd.DataFrame(columns=["ConnectionID", "IsTimeLimitL1", "IsTimeLimitL2"])
+
+    april_1_2026 = pd.to_datetime("2026-04-01")
+    df["DepartureDate"] = pd.to_datetime(df["DepartureDate"])
+
+    # Numeric conversion
+    num_cols = ["depL1", "depL2", "arrL1", "arrL2"]
+    df[num_cols] = df[num_cols].apply(pd.to_numeric, errors="coerce").fillna(0)
+
+    results = []
+
+    # Group by connection
+    for connection_id, group in df.groupby("ConnectionID"):
+        dep_date = group["DepartureDate"].min()
+        diff_years = (april_1_2026 - dep_date).days / 365.25
+
+        timelimit_L1 = max(group["depL1"].max(), group["arrL1"].max())
+        timelimit_L2 = max(group["depL2"].max(), group["arrL2"].max())
+
+        if timelimit_L1 == 0 and timelimit_L2 == 0:
+            airline_codes = group["AirlineCode"].dropna().unique()
+
+            # Find all special airline limits in connection group
+            special_L1 = None
+            special_L2 = None
+
+            for code in airline_codes:
+                if code in SPECIAL_NON_EU_TIME_LIMITS:
+                    l1, l2 = SPECIAL_NON_EU_TIME_LIMITS[code]
+
+                    special_L1 = max(special_L1 or 0, l1)
+                    special_L2 = max(special_L2 or 0, l2)
+
+            # If no special airline found → fail rule
+            if special_L1 is None and special_L2 is None:
+                is_time_limit_L1 = False
+                is_time_limit_L2 = False
+            else:
+                is_time_limit_L1 = special_L1 >= diff_years
+                is_time_limit_L2 = special_L2 >= diff_years
+        else:
+            is_time_limit_L1 = timelimit_L1 >= diff_years
+            is_time_limit_L2 = timelimit_L2 >= diff_years
+
+        results.append([connection_id, is_time_limit_L1, is_time_limit_L2])
+
+    return pd.DataFrame(
+        results, columns=["ConnectionID", "IsTimeLimitL1", "IsTimeLimitL2"]
+    )
+
+
+"""
 def calculate_timelimits(df: pd.DataFrame) -> pd.DataFrame:
     if df is None or df.empty:
         return pd.DataFrame(columns=["ConnectionID", "TimeLimitL1", "TimeLimitL2"])
@@ -117,8 +233,8 @@ def calculate_timelimits(df: pd.DataFrame) -> pd.DataFrame:
     )
 
     # Default calculation
-    agg["TimeLimitL1"] = agg[["first_dep_L1", "last_arr_L1"]].max(axis=1)
-    agg["TimeLimitL2"] = agg[["first_dep_L2", "last_arr_L2"]].max(axis=1)
+    agg["IsTimeLimitL1"] = agg[["first_dep_L1", "last_arr_L1"]].max(axis=1)
+    agg["IsTimeLimitL2"] = agg[["first_dep_L2", "last_arr_L2"]].max(axis=1)
 
     # -------------------------------------------------
     # STEP 2 — Identify connections needing special rule
@@ -166,48 +282,6 @@ def calculate_timelimits(df: pd.DataFrame) -> pd.DataFrame:
             agg = agg.drop(columns=["SpecL1", "SpecL2"], errors="ignore")
 
     return agg[["ConnectionID", "TimeLimitL1", "TimeLimitL2"]]
-
-
-"""
-def calculate_timelimits(df: pd.DataFrame) -> pd.DataFrame:
-    if df.empty:
-        return pd.DataFrame(columns=["ConnectionID", "TimeLimitL1", "TimeLimitL2"])
-
-    log("Computing time limits per connection...")
-
-    # Ensure deterministic order before groupby
-    df = df.sort_values(["ConnectionID", "LegNo"])
-
-    # Cast numeric columns
-    num_cols = ["depL1", "arrL1", "depL2", "arrL2"]
-    df[num_cols] = df[num_cols].astype("int32")
-
-    # Aggregate per connection
-    agg = df.groupby("ConnectionID", as_index=False).agg(
-        dep_L1=("depL1", "first"),
-        dep_L2=("depL2", "first"),
-        arr_L1=("arrL1", "last"),
-        arr_L2=("arrL2", "last"),
-        DepCountry=("depCountry", "first"),
-        ArrCountry=("arrCountry", "last"),
-        AirlineCode=("AirlineCode", "first"),
-    )
-
-    # Default limits
-    agg["TimeLimitL1"] = agg[["dep_L1", "arr_L1"]].max(axis=1)
-    agg["TimeLimitL2"] = agg[["dep_L2", "arr_L2"]].max(axis=1)
-
-    # Special carrier override (vectorized)
-    mask_missing = agg["DepCountry"].isna() & agg["ArrCountry"].isna()
-    mask_special = mask_missing & agg["AirlineCode"].isin(SPECIAL_NON_EU_TIME_LIMITS)
-
-    if mask_special.any():
-        mapped = agg.loc[mask_special, "AirlineCode"].map(SPECIAL_NON_EU_TIME_LIMITS)
-        agg.loc[mask_special, ["TimeLimitL1", "TimeLimitL2"]] = pd.DataFrame(
-            mapped.tolist(), index=agg.loc[mask_special].index
-        )
-
-    return agg[["ConnectionID", "TimeLimitL1", "TimeLimitL2"]]
 """
 
 
@@ -227,8 +301,8 @@ def set_time_limits(con: duckdb.DuckDBPyConnection, df_updates: pd.DataFrame) ->
 
         con.execute("""
             UPDATE TA_STANDARD_TEMPLATE t
-               SET TimeLimitL1 = u.TimeLimitL1,
-                   TimeLimitL2 = u.TimeLimitL2
+               SET IsTimeLimitL1 = u.IsTimeLimitL1,
+                   IsTimeLimitL2 = u.IsTimeLimitL2
              FROM temp_updates u
             WHERE t.ConnectionID = u.ConnectionID
               AND t.EUEligible IS TRUE
@@ -254,7 +328,8 @@ def main():
         df = get_eu_eligible_data(con)
 
         if df is not None:
-            df_updates = calculate_timelimits(df)
+            df_updates = calculate_timelimits_vectorized(df)
+            # df_updates = check_if_timelimit_is_met(df)
             set_time_limits(con, df_updates)
 
             log("──────────── DONE ────────────")

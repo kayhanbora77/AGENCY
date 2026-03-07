@@ -10,8 +10,8 @@ DATABASE_DIR = Path.home() / "my_database"
 DATABASE_NAME = "my_db.duckdb"
 DB_PATH = DATABASE_DIR / DATABASE_NAME
 
-FILE_PATH = "/home/kayhan/Desktop/Gelen_Datalar/AKBAR/RAW/JAN to DEC 2024 for C2R.xlsx"
-TABLE_NAME = "AKBAR_2024"
+FILE_PATH = "/home/kayhan/Desktop/Gelen_Datalar/AKBAR/RAW/JAN to DEC 2025 for C2R.xlsx"
+TABLE_NAME = "AKBAR_2025"
 CHUNK_SIZE = 100_000
 
 COLUMNS_TO_DELETE = ["WEEK", "BspFileYear_NB", "BspFileMonth_NB", "BspFileWeek_NB"]

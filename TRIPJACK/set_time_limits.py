@@ -68,7 +68,7 @@ def get_eu_eligible_data(con: duckdb.DuckDBPyConnection) -> Optional[pd.DataFram
             COALESCE(arrLimits.LimitL1, 0) AS arrL1,
             COALESCE(arrLimits.LimitL2, 0) AS arrL2,
             t.LegNo
-        FROM TA_STANDARD_BLUESTAR t
+        FROM TA_STANDARD_TRIPJACK t
         LEFT JOIN AIRPORTS depAirport
             ON t.FromAirport = depAirport.CodeIataAirport
         LEFT JOIN AIRPORTS arrAirport
@@ -300,7 +300,7 @@ def set_time_limits(con: duckdb.DuckDBPyConnection, df_updates: pd.DataFrame) ->
         con.register("temp_updates", df_updates)
 
         con.execute("""
-            UPDATE TA_STANDARD_BLUESTAR t
+            UPDATE TA_STANDARD_TRIPJACK t
                SET IsTimeLimitL1 = u.IsTimeLimitL1,
                    IsTimeLimitL2 = u.IsTimeLimitL2
              FROM temp_updates u

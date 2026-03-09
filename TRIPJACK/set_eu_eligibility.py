@@ -59,10 +59,10 @@ class ReferenceData:
 def detect_flight_indices(columns: List[str]) -> List[int]:
     """
     Detect numeric indices for flight number columns.
-    Supports: FlitNo1, FltNo1, FlightNo1, FlightNumber1 (case-insensitive).
+    Supports: FltNo1, FlightNo1, FlightNumber1 (case-insensitive).
     Returns sorted list of found indices e.g. [1, 2, 3, 4].
     """
-    pattern = re.compile(r"^(?:Flit|Flt|Flight)(?:No|Number)?(\d+)$", re.IGNORECASE)
+    pattern = re.compile(r"^(?:Flt|Flight)(?:No|Number)?(\d+)$", re.IGNORECASE)
     indices = []
     for col in columns:
         m = pattern.match(col)
@@ -74,9 +74,10 @@ def detect_flight_indices(columns: List[str]) -> List[int]:
 def find_col(row, *candidates):
     """Return first non-empty value from a list of candidate attribute names."""
     for name in candidates:
-        val = getattr(row, name, None)
-        if val is not None and str(val).strip() not in ("", "nan", "None"):
-            return val
+        if hasattr(row, name):
+            val = getattr(row, name, None)
+            if val is not None and str(val).strip() not in ("", "nan", "None"):
+                return val
     return None
 
 
@@ -94,6 +95,15 @@ class CSVToDBImporter:
 
         self.ref = ReferenceData(self.con)
 
+        # Debug counters
+        self.debug_counts = {
+            "total_rows": 0,
+            "no_flight_number": 0,
+            "invalid_date": 0,
+            "missing_airport": 0,
+            "successful_legs": 0,
+        }
+
     # -----------------------------
     # Utilities
     # -----------------------------
@@ -107,18 +117,22 @@ class CSVToDBImporter:
             return None
         if isinstance(value, datetime):
             return value
-        for fmt in (
-            "%Y-%m-%d %H:%M:%S",
-            "%Y-%m-%d %H:%M",
-            "%Y-%m-%d",
-            "%d/%m/%Y",
-            "%m/%d/%Y",
-            "%d.%m.%Y",
-        ):
-            try:
-                return datetime.strptime(str(value).strip(), fmt)
-            except ValueError:
-                continue
+        # Try to convert string to datetime
+        try:
+            return pd.to_datetime(str(value).strip())
+        except:
+            for fmt in (
+                "%Y-%m-%d %H:%M:%S",
+                "%Y-%m-%d %H:%M",
+                "%Y-%m-%d",
+                "%d/%m/%Y",
+                "%m/%d/%Y",
+                "%d.%m.%Y",
+            ):
+                try:
+                    return datetime.strptime(str(value).strip(), fmt)
+                except ValueError:
+                    continue
         return None
 
     @staticmethod
@@ -172,6 +186,7 @@ class CSVToDBImporter:
 
         # Print detected columns for debugging
         print(f"  Columns found: {list(df.columns)}")
+        print(f"  Total rows in CSV: {len(df):,}")
 
         # Detect flight number indices dynamically
         flight_indices = detect_flight_indices(list(df.columns))
@@ -184,9 +199,7 @@ class CSVToDBImporter:
         # Build a map: index → actual column name in the dataframe
         flt_col_map = {}
         date_col_map = {}
-        pattern_flt = re.compile(
-            r"^(?:Flit|Flt|Flight)(?:No|Number)?(\d+)$", re.IGNORECASE
-        )
+        pattern_flt = re.compile(r"^(?:Flt|Flight)(?:No|Number)?(\d+)$", re.IGNORECASE)
         pattern_date = re.compile(r"^(?:Flt|Flight)?(?:Date|Dt)(\d+)$", re.IGNORECASE)
 
         for col in df.columns:
@@ -204,58 +217,138 @@ class CSVToDBImporter:
         total = 0
         skipped = 0
 
-        for row in df.itertuples(index=False):
-            records = self._parse_row(
-                row, flight_indices, flt_col_map, date_col_map, filename
+        # Sample first few rows for debugging
+        print("\n🔍 DEBUG: First 3 rows sample:")
+        sample_rows = []
+        for idx, row in enumerate(df.itertuples(index=False)):
+            if idx < 3:
+                sample_rows.append(row)
+                print(f"\n  Row {idx + 1}:")
+                print(f"    BookingId: {getattr(row, 'BookingId', 'N/A')}")
+                print(f"    PaxName: {getattr(row, 'PaxName', 'N/A')}")
+                print(f"    FlightNumber1: {getattr(row, 'FlightNumber1', 'N/A')}")
+                print(f"    FlightDate1: {getattr(row, 'FlightDate1', 'N/A')}")
+                print(f"    Airport1: {getattr(row, 'Airport1', 'N/A')}")
+                print(f"    Airport2: {getattr(row, 'Airport2', 'N/A')}")
+
+        print("\n📊 Processing all rows:")
+
+        for row_idx, row in enumerate(df.itertuples(index=False)):
+            self.debug_counts["total_rows"] += 1
+
+            if row_idx < 5:  # Show detailed debug for first 5 rows
+                print(f"\n  Row {row_idx + 1} detailed breakdown:")
+
+            records, row_skipped = self._parse_row_debug(
+                row, flight_indices, flt_col_map, date_col_map, filename, row_idx < 5
             )
-            batch.extend(records)
+
+            if records:
+                batch.extend(records)
+                if row_idx < 5:
+                    print(f"    ✅ Generated {len(records)} leg records")
+            else:
+                skipped += 1
+                if row_idx < 5:
+                    print("    ❌ No legs generated for this row")
 
             if len(batch) >= BATCH_SIZE:
                 self._insert(batch)
                 total += len(batch)
                 batch.clear()
+                print(
+                    f"  Progress: {row_idx + 1:,} rows processed, {total:,} legs inserted"
+                )
 
         if batch:
             self._insert(batch)
             total += len(batch)
 
-        print(f"✓ Total inserted: {total:,}  |  Skipped legs: {skipped:,}")
+        print("\n" + "=" * 60)
+        print("📊 DEBUG STATISTICS:")
+        print("=" * 60)
+        print(f"Total rows processed: {self.debug_counts['total_rows']:,}")
+        print(f"Rows with no flight number: {self.debug_counts['no_flight_number']:,}")
+        print(f"Rows with invalid date: {self.debug_counts['invalid_date']:,}")
+        print(f"Rows with missing airports: {self.debug_counts['missing_airport']:,}")
+        print(f"Successful leg records: {self.debug_counts['successful_legs']:,}")
+        print("=" * 60)
+        print(
+            f"✓ Total inserted: {total:,} leg records  |  Rows with no legs: {skipped:,}"
+        )
 
     # -----------------------------
-    # Row Parsing
+    # Row Parsing with Debug
     # -----------------------------
-    def _parse_row(self, row, flight_indices, flt_col_map, date_col_map, filename):
+    def _parse_row_debug(
+        self, row, flight_indices, flt_col_map, date_col_map, filename, debug=False
+    ):
         legs = []
+        row_has_leg = False
 
         for i in flight_indices:
             # Get flight number from the dynamically detected column
             flight_no = getattr(row, flt_col_map[i], None) if i in flt_col_map else None
+
+            if debug:
+                print(f"    Leg {i}: FlightNo={flight_no}")
+
             if not flight_no or str(flight_no).strip() in ("", "nan", "None"):
+                if debug:
+                    print("      ❌ No flight number")
+                self.debug_counts["no_flight_number"] += 1
                 continue
 
             # Get flight date from the dynamically detected date column
             raw_date = (
                 getattr(row, date_col_map[i], None) if i in date_col_map else None
             )
+
+            if debug:
+                print(f"      Raw date: {raw_date}")
+
             flight_date = self.parse_date(raw_date)
             if flight_date is None:
+                if debug:
+                    print("      ❌ Invalid date")
+                self.debug_counts["invalid_date"] += 1
                 continue
 
             # Airport columns are always Airport{i} and Airport{i+1}
             from_airport = getattr(row, f"Airport{i}", None)
             to_airport = getattr(row, f"Airport{i + 1}", None)
 
+            if debug:
+                print(f"      From: {from_airport}, To: {to_airport}")
+
             if not from_airport or not to_airport:
+                if debug:
+                    print("      ❌ Missing airport(s)")
+                self.debug_counts["missing_airport"] += 1
                 continue
+
             if str(from_airport).strip() in ("", "nan", "None"):
+                if debug:
+                    print("      ❌ From airport empty")
+                self.debug_counts["missing_airport"] += 1
                 continue
+
             if str(to_airport).strip() in ("", "nan", "None"):
+                if debug:
+                    print("      ❌ To airport empty")
+                self.debug_counts["missing_airport"] += 1
                 continue
 
             flight_number = str(flight_no).replace(" ", "").upper()
-            airline = find_col(
-                row, "IATA", "AirlineCode", "Airline"
-            ) or self.extract_airline_code(flight_number)
+
+            # Try to find airline code from various columns
+            airline = find_col(row, "IATA", "AirlineCode", "Airline")
+
+            if not airline:
+                airline = self.extract_airline_code(flight_number)
+
+            if debug:
+                print(f"      Airline: {airline}")
 
             legs.append(
                 {
@@ -268,16 +361,24 @@ class CSVToDBImporter:
                 }
             )
 
-        if not legs:
-            return []
+            row_has_leg = True
+            self.debug_counts["successful_legs"] += 1
+
+        if not row_has_leg:
+            return [], True
 
         eligible = self.determine_eligibility(legs)
         connection_id = str(uuid.uuid4())
         final_airport = legs[-1]["ToAirport"]
 
-        eticket = str(find_col(row, "TicketNo", "TicketNumber", "ETicketNo") or "")
+        eticket = str(find_col(row, "TicketNo", "ETicketNo") or "")
         pax_name = str(find_col(row, "PaxName", "PassengerName", "Name") or "")
-        booking_ref = find_col(row, "PNRNo", "PNR", "BookingRef")
+        booking_ref = find_col(row, "PNRNo", "BookingRef_PNR", "BookingRef")
+
+        if debug:
+            print(
+                f"    Connection details: Pax={pax_name}, Booking={booking_ref}, Eligible={eligible}"
+            )
 
         records = []
         for leg in legs:
@@ -304,7 +405,7 @@ class CSVToDBImporter:
                 }
             )
 
-        return records
+        return records, False
 
     # -----------------------------
     # Insert
@@ -314,7 +415,7 @@ class CSVToDBImporter:
             print("⚠️  No records to insert")
             return
 
-        table_name = "TA_STANDARD_BLUESTAR"
+        table_name = "TA_STANDARD_TRIPJACK"
         columns = [
             "Id",
             "ConnectionID",
@@ -346,7 +447,8 @@ class CSVToDBImporter:
             print(f"  ✓ Inserted {len(df):,} records")
         except Exception as e:
             print(f"  ❌ Insert error: {e}")
-            print(f"     Sample record: {records[0]}")
+            if records:
+                print(f"     Sample record: {records[0]}")
 
     # -----------------------------
     # CSV Reader

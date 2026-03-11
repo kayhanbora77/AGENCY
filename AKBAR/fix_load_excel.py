@@ -10,7 +10,9 @@ DATABASE_DIR = Path.home() / "my_database"
 DATABASE_NAME = "my_db.duckdb"
 DB_PATH = DATABASE_DIR / DATABASE_NAME
 
-FILE_PATH = "/home/kayhan/Desktop/Gelen_Datalar/AKBAR/RAW/JAN to DEC 2025 for C2R.xlsx"
+FILE_PATH = (
+    "/home/kayhan/Desktop/Gelen_Datalar/AKBAR/RAW/JAN to DEC for C2R 2025 Revised.xlsx"
+)
 TABLE_NAME = "AKBAR_2025"
 CHUNK_SIZE = 100_000
 

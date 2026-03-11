@@ -65,10 +65,10 @@ def create_target_table(con):
             PaxName VARCHAR,
             AirlineName VARCHAR,
 
-            FlightNo1 VARCHAR,
-            FlightNo2 VARCHAR,
-            FlightNo3 VARCHAR,
-            FlightNo4 VARCHAR,            
+            FlightNumber1 VARCHAR,
+            FlightNumber2 VARCHAR,
+            FlightNumber3 VARCHAR,
+            FlightNumber4 VARCHAR,            
 
             FlightDate1 TIMESTAMP_NS,
             FlightDate2 TIMESTAMP_NS,
@@ -83,7 +83,7 @@ def create_target_table(con):
 
             CONSTRAINT uq_flycreative UNIQUE (
                 AirlineName, TicketNumber,
-                FlightNo1, FlightNo2, FlightNo3, FlightNo4,
+                FlightNumber1, FlightNumber2, FlightNumber3, FlightNumber4,
                 FlightDate1, FlightDate2, FlightDate3, FlightDate4,
                 Airport1, Airport2, Airport3, Airport4, Airport5
             )
@@ -110,28 +110,28 @@ def create_clean_view(con):
 
             NULLIF(
                 regexp_replace(
-                    regexp_replace(upper(FlightNo1), '[^A-Z0-9]', '', 'g'),
+                    regexp_replace(upper(FlightNumber1), '[^A-Z0-9]', '', 'g'),
                     '{FLTNO_REGEX}',
                     '\\1\\2'
                 ),
             '') AS FN1,
             NULLIF(
                 regexp_replace(
-                    regexp_replace(upper(FlightNo2), '[^A-Z0-9]', '', 'g'),
+                    regexp_replace(upper(FlightNumber2), '[^A-Z0-9]', '', 'g'),
                     '{FLTNO_REGEX}',
                     '\\1\\2'
                 ),
             '') AS FN2,
             NULLIF(
                 regexp_replace(
-                    regexp_replace(upper(FlightNo3), '[^A-Z0-9]', '', 'g'),
+                    regexp_replace(upper(FlightNumber3), '[^A-Z0-9]', '', 'g'),
                     '{FLTNO_REGEX}',
                     '\\1\\2'
                 ),
             '') AS FN3,
             NULLIF(
                 regexp_replace(
-                    regexp_replace(upper(FlightNo4), '[^A-Z0-9]', '', 'g'),
+                    regexp_replace(upper(FlightNumber4), '[^A-Z0-9]', '', 'g'),
                     '{FLTNO_REGEX}',
                     '\\1\\2'
                 ),
@@ -215,7 +215,7 @@ def deduplicate_flights(flights):
     unique_flights = []
 
     for fn, dt, dep_ap, arr_ap in flights:
-        # Deduplicate by FlightNo + FlightDate (date-level)
+        # Deduplicate by FlightNumber + FlightDate (date-level)
         key = (fn, dt.date())
 
         if key not in seen_segments:

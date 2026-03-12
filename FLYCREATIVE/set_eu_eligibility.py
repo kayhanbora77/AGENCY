@@ -74,6 +74,18 @@ class CSVToDBImporter:
     def parse_date(value: Any) -> Optional[datetime]:
         if pd.isna(value) or value == "":
             return None
+
+        dt = pd.to_datetime(value, errors="coerce")
+        if pd.isna(dt):
+            return None
+
+        return dt.to_pydatetime()
+
+    """
+    @staticmethod
+    def parse_date(value: Any) -> Optional[datetime]:
+        if pd.isna(value) or value == "":
+            return None
         if isinstance(value, datetime):
             return value
 
@@ -90,16 +102,19 @@ class CSVToDBImporter:
             except ValueError:
                 continue
         return None
+    """
 
     @staticmethod
     def extract_airline_code(flight_number: str) -> str:
         if not flight_number:
+            print("no flight number")
             return ""
         match = re.match(r"^([A-Z0-9]{2})", str(flight_number).upper())
         return match.group(1) if match else ""
 
     def determine_eligibility(self, legs: List[Dict[str, Any]]) -> bool:
         if not legs:
+            print("no legs")
             return False
 
         leg_dep_airport = legs[0]["FromAirport"]
@@ -194,6 +209,7 @@ class CSVToDBImporter:
             to_airport = getattr(row, f"Airport{i + 1}", None)
 
             if not from_airport or not to_airport:
+                print("No from or to airport found for row")
                 continue
 
             flight_number = str(flight_no).replace(" ", "").upper()

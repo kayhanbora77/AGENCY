@@ -105,14 +105,14 @@ def load_csv_files(con) -> None:
                 Airline,
                 ETicketNo,
                 Direction,
+                TpackRef,
                 FlightNumber1,
                 FlightNumber2,
                 try_strptime(FlightDate1, '%d/%m/%Y')::TIMESTAMP AS FlightDate1,
                 try_strptime(FlightDate2, '%d/%m/%Y')::TIMESTAMP AS FlightDate2,
                 Airport1,
                 Airport2,
-                Airport3,
-                TpackRef                
+                Airport3                
             FROM read_csv_auto(
                 '{csv_path}',
                 all_varchar=true,
@@ -132,14 +132,14 @@ def load_csv_files(con) -> None:
                 Airline,
                 ETicketNo,
                 Direction,
+                TpackRef,
                 FlightNumber1,
                 FlightNumber2,                
                 try_strptime(FlightDate1, '%d/%m/%Y')::TIMESTAMP AS FlightDate1,
                 try_strptime(FlightDate2, '%d/%m/%Y')::TIMESTAMP AS FlightDate2,
                 Airport1,
                 Airport2,
-                Airport3,
-                TpackRef
+                Airport3                
             FROM read_csv_auto(
                 '{csv_path}',
                 all_varchar=true,

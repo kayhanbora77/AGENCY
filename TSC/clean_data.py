@@ -11,8 +11,8 @@ DATABASE_DIR = Path.home() / "my_database"
 DATABASE_NAME = "my_db.duckdb"
 DB_PATH = DATABASE_DIR / DATABASE_NAME
 
-SOURCE_TABLE = "TRAVELPACK"
-TARGET_TABLE = "TRAVELPACK_TARGET"
+SOURCE_TABLE = "TSC"
+TARGET_TABLE = "TSC_TARGET"
 
 FLTNO_REGEX = r"^([A-Z]{2,3})0+([1-9][0-9]*)$"
 
@@ -56,24 +56,44 @@ def create_target_table(con):
     con.execute(f"""
         CREATE TABLE {TARGET_TABLE} (
             PaxName VARCHAR,
-            AirlineBooking VARCHAR,
-            Airline VARCHAR,
-            ETicketNo VARCHAR,
-            Direction VARCHAR,
-            TpackRef VARCHAR,
+            PNRCRS VARCHAR,
+            PNRAirline VARCHAR,
+            Airlines VARCHAR,
+            AirlineCode VARCHAR,
+            TktNo VARCHAR,
+            
             FlightNumber1 VARCHAR,
             FlightNumber2 VARCHAR,
+            FlightNumber3 VARCHAR,
+            FlightNumber4 VARCHAR,
+            FlightNumber5 VARCHAR,
+            FlightNumber6 VARCHAR,
+
+
             FlightDate1 TIMESTAMP,
             FlightDate2 TIMESTAMP,
+            FlightDate3 TIMESTAMP,
+            FlightDate4 TIMESTAMP,
+            FlightDate5 TIMESTAMP,
+            FlightDate6 TIMESTAMP,
+
+
             Airport1 VARCHAR,
             Airport2 VARCHAR,
-            Airport3 VARCHAR,            
+            Airport3 VARCHAR,
+            Airport4 VARCHAR,
+            Airport5 VARCHAR,
+            Airport6 VARCHAR,
+            Airport7 VARCHAR,
 
-            CONSTRAINT uq_travelpack UNIQUE (
-                AirlineBooking, Airline, ETicketNo,
-                FlightNumber1, FlightNumber2,
-                FlightDate1, FlightDate2,
-                Airport1, Airport2, Airport3
+            CONSTRAINT uq_tsc UNIQUE (
+                PNRCRS, AirlineCode, TktNo,
+                FlightNumber1, FlightNumber2, FlightNumber3, FlightNumber4,
+                FlightNumber5, FlightNumber6,
+                FlightDate1, FlightDate2, FlightDate3, FlightDate4,
+                FlightDate5, FlightDate6,
+                Airport1, Airport2, Airport3, Airport4, Airport5,
+                Airport6,Airport7
             )
         )
     """)
@@ -90,18 +110,11 @@ def create_clean_view(con):
         CREATE OR REPLACE TEMP VIEW cleaned_source AS
         SELECT
             PaxName,
-            AirlineBooking,
-            Airline,
-            ETicketNo,
-            Direction,
-            TpackRef,
-            FlightNumber1,
-            FlightNumber2,
-            FlightDate1,
-            FlightDate2,
-            Airport1,
-            Airport2,
-            Airport3,            
+            PNRCRS,
+            PNRAirline,
+            Airlines,
+            AirlineCode,
+            TktNo,
 
             NULLIF(
                 regexp_replace(
@@ -113,17 +126,49 @@ def create_clean_view(con):
                     replace(trim(upper(FlightNumber2)), ' ', ''),
                     '{FLTNO_REGEX}',
                     '\\1\\2'),'') AS FN2,
+            NULLIF(
+                regexp_replace(
+                    replace(trim(upper(FlightNumber3)), ' ', ''),
+                    '{FLTNO_REGEX}',
+                    '\\1\\2'),'') AS FN3,
+            NULLIF(
+                regexp_replace(
+                    replace(trim(upper(FlightNumber4)), ' ', ''),
+                    '{FLTNO_REGEX}',
+                    '\\1\\2'),'') AS FN4,
+            NULLIF(
+                regexp_replace(
+                    replace(trim(upper(FlightNumber5)), ' ', ''),
+                    '{FLTNO_REGEX}',
+                    '\\1\\2'),'') AS FN5,
+            NULLIF(
+                regexp_replace(
+                    replace(trim(upper(FlightNumber6)), ' ', ''),
+                    '{FLTNO_REGEX}',
+                    '\\1\\2'),'') AS FN6,
 
             TRY_CAST(FlightDate1 AS TIMESTAMP) AS DT1,
             TRY_CAST(FlightDate2 AS TIMESTAMP) AS DT2,
+            TRY_CAST(FlightDate3 AS TIMESTAMP) AS DT3,
+            TRY_CAST(FlightDate4 AS TIMESTAMP) AS DT4,
+            TRY_CAST(FlightDate5 AS TIMESTAMP) AS DT5,
+            TRY_CAST(FlightDate6 AS TIMESTAMP) AS DT6,
 
             Airport1 AS AP1,
             Airport2 AS AP2,
-            Airport3 AS AP3
+            Airport3 AS AP3,
+            Airport4 AS AP4,
+            Airport5 AS AP5,
+            Airport6 AS AP6,
+            Airport7 AS AP7
         FROM {SOURCE_TABLE}
         WHERE
               (TRY_CAST(FlightDate1 AS TIMESTAMP) BETWEEN '{VALID_YEAR_MIN}-01-01' AND '{VALID_YEAR_MAX}-12-31')
            OR (TRY_CAST(FlightDate2 AS TIMESTAMP) BETWEEN '{VALID_YEAR_MIN}-01-01' AND '{VALID_YEAR_MAX}-12-31')
+           OR (TRY_CAST(FlightDate3 AS TIMESTAMP) BETWEEN '{VALID_YEAR_MIN}-01-01' AND '{VALID_YEAR_MAX}-12-31')
+           OR (TRY_CAST(FlightDate4 AS TIMESTAMP) BETWEEN '{VALID_YEAR_MIN}-01-01' AND '{VALID_YEAR_MAX}-12-31')
+           OR (TRY_CAST(FlightDate5 AS TIMESTAMP) BETWEEN '{VALID_YEAR_MIN}-01-01' AND '{VALID_YEAR_MAX}-12-31')
+           OR (TRY_CAST(FlightDate6 AS TIMESTAMP) BETWEEN '{VALID_YEAR_MIN}-01-01' AND '{VALID_YEAR_MAX}-12-31')
     """)
 
 
@@ -149,13 +194,13 @@ def process_batch(con, offset):
 
     out_rows = []
     base_data = df[
-        ["PaxName", "AirlineBooking", "Airline", "ETicketNo", "Direction", "TpackRef"]
+        ["PaxName", "PNRCRS", "PNRAirline", "Airlines", "AirlineCode", "TktNo"]
     ].values
 
     for idx, row in enumerate(df.itertuples(index=False)):
         flights = []
 
-        for i in range(1, 3):
+        for i in range(1, 7):
             fn = getattr(row, f"FN{i}")
             dt = getattr(row, f"DT{i}")
 
@@ -230,11 +275,11 @@ def process_batch(con, offset):
         # Build output rows
         for route in routes:
             row_out = list(base_data[idx])
-            fn_out = [None] * 2
-            dt_out = [None] * 2
-            ap_out = [None] * 3
+            fn_out = [None] * 6
+            dt_out = [None] * 6
+            ap_out = [None] * 7
 
-            for i, (fn, dt, dep_ap, arr_ap) in enumerate(route[:2]):
+            for i, (fn, dt, dep_ap, arr_ap) in enumerate(route[:6]):
                 fn_out[i] = fn
                 dt_out[i] = dt
                 ap_out[i] = dep_ap

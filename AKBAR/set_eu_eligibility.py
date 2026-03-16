@@ -18,7 +18,7 @@ THREADS = 8
 MEMORY_LIMIT = "8GB"
 TEMP_DIR = "/tmp/duckdb_temp"
 
-CSV_FILE_PATH = "/home/kayhan/Desktop/Gelen_Datalar/TRAVELPACK/FILTER-1(CLEANED)/TRAVELPACK_TARGET_202603121136.csv"
+CSV_FILE_PATH = "/home/kayhan/Desktop/Gelen_Datalar/AKBAR/FILTER-1(CLEANED)/AKBAR_TARGET_202603131533.csv"
 
 BATCH_SIZE = 50_000
 
@@ -70,7 +70,6 @@ class CSVToDBImporter:
     # -----------------------------
     # Utilities
     # -----------------------------
-    @staticmethod
     @staticmethod
     def parse_date(value: Any) -> Optional[datetime]:
         if pd.isna(value) or value == "":
@@ -222,7 +221,6 @@ class CSVToDBImporter:
             getattr(row, "PNR", None)
             or getattr(row, "PNRNo", None)
             or getattr(row, "BookingRef", None)
-            or getattr(row, "AirlineBooking", None)
         )
         records = []
         for leg in legs:
@@ -260,7 +258,7 @@ class CSVToDBImporter:
             print("⚠️  No records to insert")
             return
 
-        table_name = "TA_STANDARD_TRAVELPACK"
+        table_name = "TA_STANDARD_AKBAR"
         columns = [
             "Id",
             "ConnectionID",

@@ -76,22 +76,12 @@ class CSVToDBImporter:
     def parse_date(value: Any) -> Optional[datetime]:
         if pd.isna(value) or value == "":
             return None
-        if isinstance(value, datetime):
-            return value
 
-        for fmt in (
-            "%Y-%m-%d %H:%M:%S",
-            "%Y-%m-%d %H:%M",
-            "%Y-%m-%d",
-            "%d/%m/%Y",
-            "%m/%d/%Y",
-            "%d.%m.%Y",
-        ):
-            try:
-                return datetime.strptime(str(value).strip(), fmt)
-            except ValueError:
-                continue
-        return None
+        dt = pd.to_datetime(value, errors="coerce")
+        if pd.isna(dt):
+            return None
+
+        return dt.to_pydatetime()
 
     @staticmethod
     def extract_airline_code(flight_number: str) -> str:

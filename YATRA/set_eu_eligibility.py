@@ -37,7 +37,9 @@ class ReferenceData:
         self.eu_carriers = self._load_carriers(con)
 
     def _load_airports(self, con):
-        rows = con.execute("SELECT CodeIataAirport FROM AIRPORTS").fetchall()
+        rows = con.execute(
+            "SELECT CodeIataAirport FROM AIRPORTS WHERE CodeIso2Country NOT IN ('TR','MA')"
+        ).fetchall()
         return {r[0].strip().upper() for r in rows if r[0]}
 
     def _load_carriers(self, con):

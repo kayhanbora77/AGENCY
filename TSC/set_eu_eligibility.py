@@ -13,6 +13,7 @@ import re
 DATABASE_DIR = Path.home() / "my_database"
 DATABASE_NAME = "my_db.duckdb"
 DB_PATH = DATABASE_DIR / DATABASE_NAME
+TABLE_NAME = "TA_STANDARD_TSC"
 
 THREADS = 8
 MEMORY_LIMIT = "8GB"
@@ -265,7 +266,6 @@ class CSVToDBImporter:
             print("⚠️  No records to insert")
             return
 
-        table_name = "TA_STANDARD_TSC"
         columns = [
             "Id",
             "ConnectionID",
@@ -292,7 +292,7 @@ class CSVToDBImporter:
         try:
             self.con.register("tmp_df", df)
             self.con.execute(f"""
-                INSERT INTO {table_name} ({", ".join(columns)})
+                INSERT INTO {TABLE_NAME} ({", ".join(columns)})
                 SELECT {", ".join(columns)} FROM tmp_df
             """)
             print(f"✓ Inserted {len(df)} records")

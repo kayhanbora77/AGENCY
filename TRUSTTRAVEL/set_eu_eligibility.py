@@ -17,10 +17,9 @@ DB_PATH = DATABASE_DIR / DATABASE_NAME
 THREADS = 8
 MEMORY_LIMIT = "8GB"
 TEMP_DIR = "/tmp/duckdb_temp"
+TABLE_NAME = "TA_STANDARD_TRUSTTRAVEL"
 
-CSV_FILE_PATH = (
-    "/home/kayhan/Desktop/Gelen_Datalar/TRUST_TRAVEL/PROCEED/TRUST_TRAVEL_TARGET_4.csv"
-)
+CSV_FILE_PATH = "/home/kayhan/Desktop/Gelen_Datalar/TRUSTTRAVEL/FILTER-1(CLEANED)/TRUST_TRAVEL_TARGET_4.csv"
 
 BATCH_SIZE = 50_000
 
@@ -262,7 +261,6 @@ class CSVToDBImporter:
             print("⚠️  No records to insert")
             return
 
-        table_name = "TA_STANDARD_TRUSTTRAVEL"
         columns = [
             "Id",
             "ConnectionID",
@@ -289,7 +287,7 @@ class CSVToDBImporter:
         try:
             self.con.register("tmp_df", df)
             self.con.execute(f"""
-                INSERT INTO {table_name} ({", ".join(columns)})
+                INSERT INTO {TABLE_NAME} ({", ".join(columns)})
                 SELECT {", ".join(columns)} FROM tmp_df
             """)
             print(f"✓ Inserted {len(df)} records")

@@ -44,7 +44,7 @@ class ReferenceData:
 
     def _load_carriers(self, con):
         rows = con.execute(
-            "SELECT ICAOCode FROM AIRLINES WHERE IsInUnion = 1"
+            "SELECT IataCode FROM AIRLINES WHERE IsInUnion = 1"
         ).fetchall()
         return {r[0].strip().upper() for r in rows if r[0]}
 

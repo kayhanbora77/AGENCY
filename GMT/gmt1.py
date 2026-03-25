@@ -1,5 +1,5 @@
 import time
-from datetime import datetime, timedelta
+from datetime import timedelta
 
 # Get local time and GMT time as struct_time objects
 local_time_struct = time.localtime()

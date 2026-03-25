@@ -1,5 +1,5 @@
 # Import the gmtime and strftime functions from the time module
-from time import gmtime, strftime
+from time import strftime
 
 # Import the time module
 import time

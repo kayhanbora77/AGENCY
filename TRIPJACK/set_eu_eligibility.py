@@ -23,7 +23,7 @@ CSV_FILE_PATH = "/home/kayhan/Desktop/Gelen_Datalar/TRIPJACK/FILTER-1(CLEANED)/T
 
 BATCH_SIZE = 100_000
 
-SPECIAL_NON_EU_CARRIERS = {"BA", "TK", "PC", "JU", "H2", "FH", "VF", "VS"}
+SPECIAL_NON_EU_CARRIERS = {"BA", "TK", "PC", "JU", "FH", "VF", "VS"}
 
 DATABASE_DIR.mkdir(parents=True, exist_ok=True)
 Path(TEMP_DIR).mkdir(parents=True, exist_ok=True)

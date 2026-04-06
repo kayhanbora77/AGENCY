@@ -15,6 +15,8 @@ SOURCE_TABLE = "TRAVELPACK"
 TARGET_TABLE = "TRAVELPACK_TARGET"
 
 FLTNO_REGEX = r"^([A-Z]{2,3})0+([1-9][0-9]*)$"
+FLTNO_CLEAN_REGEX = r"^([A-Z]{2,3}\d+)"
+FLT_NO_EXTRACT_REGEX = r"^([A-Z]{2,3}[0-9]+)"
 
 BATCH_SIZE = 100_000
 
@@ -104,15 +106,19 @@ def create_clean_view(con):
             Airport3,            
 
             NULLIF(
-                regexp_replace(
+                regexp_extract(
                     replace(trim(upper(FlightNumber1)), ' ', ''),
-                    '{FLTNO_REGEX}',
-                    '\\1\\2'),'') AS FN1,
+                    '{FLT_NO_EXTRACT_REGEX}',
+                    1
+                ),
+            '') AS FN1,
             NULLIF(
-                regexp_replace(
+                regexp_extract(
                     replace(trim(upper(FlightNumber2)), ' ', ''),
-                    '{FLTNO_REGEX}',
-                    '\\1\\2'),'') AS FN2,
+                    '{FLT_NO_EXTRACT_REGEX}',
+                    1
+                ),
+            '') AS FN2,
 
             TRY_CAST(FlightDate1 AS TIMESTAMP) AS DT1,
             TRY_CAST(FlightDate2 AS TIMESTAMP) AS DT2,

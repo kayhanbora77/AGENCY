@@ -169,6 +169,10 @@ def process_batch(con, offset):
             if not flight_number:
                 continue
 
+            # ❌ Ignore purely numeric flight numbers (e.g., "6000000000000")
+            if flight_number.isdigit():
+                continue
+
             # ❌ Remove TK000, TK0000, 0000, etc. (Numeric part all zeros)
             stripped = flight_number.rstrip("0")
 

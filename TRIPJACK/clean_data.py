@@ -84,10 +84,8 @@ def create_target_table(con):
             Airport6 VARCHAR,
 
             CONSTRAINT uq_tripjack UNIQUE (
-                Airline, ETicketNo,
-                FlightNumber1, FlightNumber2, FlightNumber3, FlightNumber4, FlightNumber5,
-                FlightDate1, FlightDate2, FlightDate3, FlightDate4, FlightDate5,
-                Airport1, Airport2, Airport3, Airport4, Airport5, Airport6
+                BookingId, PaxName, ETicketNo, Airline,
+                FlightNumber1, FlightDate1, Airport1, Airport2
             )
         )
     """)
@@ -102,7 +100,7 @@ def create_clean_view(con):
 
     con.execute(f"""
         CREATE OR REPLACE TEMP VIEW cleaned_source AS
-        SELECT
+        SELECT DISTINCT
             BookingId,
             PaxName,
             JourneyBucket,
@@ -298,9 +296,11 @@ def process_batch(con, offset):
         return 0
 
     df_out = pd.DataFrame(out_rows, dtype="object")
+    # NEW: Remove duplicates from the batch before inserting
+    df_out = df_out.drop_duplicates()
     con.execute(f"INSERT OR IGNORE INTO {TARGET_TABLE} SELECT * FROM df_out")
 
-    return len(out_rows)
+    return len(df_out)
 
 
 def main():
@@ -312,6 +312,7 @@ def main():
     create_clean_view(con)
 
     result = con.execute("SELECT COUNT(*) FROM cleaned_source").fetchone()
+
     total = result[0] if result else 0
     log(f"📊 Cleaned rows: {total:,}")
 

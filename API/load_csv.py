@@ -16,8 +16,8 @@ DB_PATH = DATABASE_DIR / DATABASE_NAME
 THREADS = 4
 MEMORY_LIMIT = "6GB"
 TEMP_DIR = "/tmp/duckdb_temp"
-TABLE_NAME = "PROTON"
-CVS_DIR = Path("/home/kayhan/Desktop/Gelen_Datalar/PROTON/PROCEED/")
+TABLE_NAME = "API_OLD"
+CVS_DIR = Path("/home/kayhan/Desktop/Gelen_Datalar/API_OLD/PROCEED/")
 
 
 def log(msg: str) -> None:

@@ -1,2 +1,6 @@
-.kluster
+# DuckDB database and its temporary files
 my_db.duckdb
+my_db.duckdb.wal
+*.duckdb*
+*.wal
+/my_database/   # or the exact path if you want to ignore the whole folder

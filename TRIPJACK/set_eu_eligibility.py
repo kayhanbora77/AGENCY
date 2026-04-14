@@ -203,27 +203,10 @@ class CSVToDBImporter:
         total = 0
         skipped = 0
 
-        # Sample first few rows for debugging
-        print("\n🔍 DEBUG: First 3 rows sample:")
-        sample_rows = []
-        for idx, row in enumerate(df.itertuples(index=False)):
-            if idx < 3:
-                sample_rows.append(row)
-                print(f"\n  Row {idx + 1}:")
-                print(f"    BookingId: {getattr(row, 'BookingId', 'N/A')}")
-                print(f"    PaxName: {getattr(row, 'PaxName', 'N/A')}")
-                print(f"    FlightNumber1: {getattr(row, 'FlightNumber1', 'N/A')}")
-                print(f"    FlightDate1: {getattr(row, 'FlightDate1', 'N/A')}")
-                print(f"    Airport1: {getattr(row, 'Airport1', 'N/A')}")
-                print(f"    Airport2: {getattr(row, 'Airport2', 'N/A')}")
-
         print("\n📊 Processing all rows:")
 
         for row_idx, row in enumerate(df.itertuples(index=False)):
             self.debug_counts["total_rows"] += 1
-
-            if row_idx < 5:  # Show detailed debug for first 5 rows
-                print(f"\n  Row {row_idx + 1} detailed breakdown:")
 
             records, row_skipped = self._parse_row_debug(
                 row, flight_indices, flt_col_map, date_col_map, filename, row_idx < 5
@@ -276,12 +259,7 @@ class CSVToDBImporter:
             # Get flight number from the dynamically detected column
             flight_no = getattr(row, flt_col_map[i], None) if i in flt_col_map else None
 
-            if debug:
-                print(f"    Leg {i}: FlightNo={flight_no}")
-
             if not flight_no or str(flight_no).strip() in ("", "nan", "None"):
-                if debug:
-                    print("      ❌ No flight number")
                 self.debug_counts["no_flight_number"] += 1
                 continue
 
@@ -290,13 +268,8 @@ class CSVToDBImporter:
                 getattr(row, date_col_map[i], None) if i in date_col_map else None
             )
 
-            if debug:
-                print(f"      Raw date: {raw_date}")
-
             flight_date = self.parse_date(raw_date)
             if flight_date is None:
-                if debug:
-                    print("      ❌ Invalid date")
                 self.debug_counts["invalid_date"] += 1
                 continue
 
@@ -304,24 +277,15 @@ class CSVToDBImporter:
             from_airport = getattr(row, f"Airport{i}", None)
             to_airport = getattr(row, f"Airport{i + 1}", None)
 
-            if debug:
-                print(f"      From: {from_airport}, To: {to_airport}")
-
             if not from_airport or not to_airport:
-                if debug:
-                    print("      ❌ Missing airport(s)")
                 self.debug_counts["missing_airport"] += 1
                 continue
 
             if str(from_airport).strip() in ("", "nan", "None"):
-                if debug:
-                    print("      ❌ From airport empty")
                 self.debug_counts["missing_airport"] += 1
                 continue
 
             if str(to_airport).strip() in ("", "nan", "None"):
-                if debug:
-                    print("      ❌ To airport empty")
                 self.debug_counts["missing_airport"] += 1
                 continue
 
@@ -332,9 +296,6 @@ class CSVToDBImporter:
 
             if not airline:
                 airline = self.extract_airline_code(flight_number)
-
-            if debug:
-                print(f"      Airline: {airline}")
 
             legs.append(
                 {
@@ -361,11 +322,6 @@ class CSVToDBImporter:
         pax_name = str(find_col(row, "PaxName", "PassengerName", "Name") or "")
         booking_ref = find_col(row, "PNRNo", "BookingRef_PNR", "BookingRef")
 
-        if debug:
-            print(
-                f"    Connection details: Pax={pax_name}, Booking={booking_ref}, Eligible={eligible}"
-            )
-
         records = []
         for leg in legs:
             records.append(
@@ -388,6 +344,8 @@ class CSVToDBImporter:
                     "ExtraNote": None,
                     "FlightFound": False,
                     "LegNo": leg["LegNo"],
+                    "IsTimeLimitL1": False,
+                    "IsTimeLimitL2": False,
                 }
             )
 
@@ -420,6 +378,8 @@ class CSVToDBImporter:
             "ExtraNote",
             "FlightFound",
             "LegNo",
+            "IsTimeLimitL1",
+            "IsTimeLimitL2",
         ]
 
         df = pd.DataFrame(records, columns=columns)

@@ -84,8 +84,7 @@ def create_target_table(con):
             Airport6 VARCHAR,
 
             CONSTRAINT uq_tripjack UNIQUE (
-                BookingId, PaxName, ETicketNo, Airline,
-                FlightNumber1, FlightDate1, Airport1, Airport2
+                BookingId, PaxName, FlightNumber1, FlightDate1,Airport1, Airport2
             )
         )
     """)

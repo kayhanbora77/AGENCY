@@ -12,3 +12,9 @@ my_db.duckdb.wal
 __pycache__/
 *.pyc
 *.pyo
+
+# DuckDB files
+my_db.duckdb
+my_db.duckdb.wal
+*.duckdb*
+/my_database/

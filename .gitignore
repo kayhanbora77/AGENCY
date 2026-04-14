@@ -1,6 +1,14 @@
-# DuckDB database and its temporary files
+# DuckDB database files - never commit these
 my_db.duckdb
 my_db.duckdb.wal
 *.duckdb*
 *.wal
-/my_database/   # or the exact path if you want to ignore the whole folder
+
+# Temporary directories
+/tmp/duckdb_temp/
+/my_database/
+
+# Python cache
+__pycache__/
+*.pyc
+*.pyo

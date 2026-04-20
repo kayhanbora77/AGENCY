@@ -18,7 +18,6 @@ LOG_PATH = Path.home() / "Desktop/Gelen_Datalar/API/TRIPJACK/TRIPJACK_DELAYED/lo
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
-
 DATETIME_COLS = [
     "ArrivalScheduledTimeLocal",
     "ArrivalRevisedTimeLocal",
@@ -49,12 +48,10 @@ def log_null_row(row: pd.Series) -> None:
 
 
 def has_null_times(row: pd.Series) -> bool:
-    # RunwayTime is often missing — we only strictly need Scheduled + at least one actual
     revised_missing = pd.isna(row.ArrivalRevisedTimeLocal)
     runway_missing = pd.isna(row.ArrivalRunwayTimeLocal)
-    return (
-        pd.isna(row.ArrivalScheduledTimeLocal)
-        or (revised_missing and runway_missing)  # need at least one actual time
+    return pd.isna(row.ArrivalScheduledTimeLocal) or (
+        revised_missing and runway_missing
     )
 
 
@@ -85,8 +82,6 @@ def group_has_nulls(group: pd.DataFrame) -> bool:
 # ==================================================
 # DATA LOADING
 # ==================================================
-
-
 def load_groups() -> tuple[list[pd.DataFrame], list[pd.DataFrame]]:
     with duckdb.connect(DB_PATH) as con:
         df = con.execute(f"SELECT * FROM {SOURCE_TABLE}").df()
@@ -99,6 +94,9 @@ def load_groups() -> tuple[list[pd.DataFrame], list[pd.DataFrame]]:
         if col in df.columns:
             df[col] = pd.to_datetime(df[col].replace("NULL", pd.NaT), errors="coerce")
 
+    # FIX 1: sort within each group by departure time before grouping
+    df = df.sort_values(["ConnectionID", "LegNo"])
+
     grouped = df.groupby("ConnectionID")
 
     single_list: list[pd.DataFrame] = []
@@ -108,9 +106,9 @@ def load_groups() -> tuple[list[pd.DataFrame], list[pd.DataFrame]]:
         if group_has_nulls(group):
             continue
         if len(group) == 1:
-            single_list.append(group)
+            single_list.append(group.copy())
         else:
-            multi_list.append(group)
+            multi_list.append(group.copy())
 
     return single_list, multi_list
 
@@ -118,37 +116,79 @@ def load_groups() -> tuple[list[pd.DataFrame], list[pd.DataFrame]]:
 # ==================================================
 # ELIGIBILITY CHECKS
 # ==================================================
-
-
-def arrival_delay(row: pd.Series) -> timedelta:
-    return (
-        max(row.ArrivalRevisedTimeLocal, row.ArrivalRunwayTimeLocal)
-        - row.ArrivalScheduledTimeLocal
-    )
-
-
 def is_single_eligible(group: pd.DataFrame) -> bool:
-    return arrival_delay(group.iloc[0]) >= timedelta(minutes=165)
+    delay = pd.Timedelta(
+        arrival_delay(group.iloc[-1])
+    )  # ensure Timedelta, not numpy int
+    group["DelayTime"] = delay
+    group["Eligible"] = delay >= timedelta(minutes=165)
+    return bool(group["Eligible"].iloc[-1])
 
 
 def is_multi_eligible(group: pd.DataFrame) -> bool:
     for i in range(len(group) - 1):
         row = group.iloc[i]
         next_row = group.iloc[i + 1]
-        missed_connection_buffer = next_row.DepartureScheduledTimeLocal - max(
-            row.ArrivalRevisedTimeLocal, row.ArrivalRunwayTimeLocal
-        )
+        actual_arrival = best_actual_arrival(row)
+        if pd.isna(actual_arrival):
+            continue
+        missed_connection_buffer = next_row.DepartureScheduledTimeLocal - actual_arrival
         if missed_connection_buffer <= timedelta(minutes=45):
+            group[f"LayOverTime{i + 1}"] = (
+                missed_connection_buffer  # FIX 2: match DB casing
+            )
+            group["Eligible"] = True
             return True
-    # Check whether the final leg itself had a long delay
-    return is_single_eligible(group.iloc[[-1]])
+    return is_single_eligible(group)
+
+
+# ==================================================
+# DB UPDATE
+# ==================================================
+def to_seconds(val) -> int | None:
+    """Convert timedelta, pd.Timedelta, or numpy int64 (nanoseconds) to integer seconds."""
+    try:
+        if val is None or pd.isna(val):
+            return None
+    except (TypeError, ValueError):
+        pass  # pd.isna() can throw on some types — if so, it's not NaT
+    if isinstance(val, (pd.Timedelta, timedelta)):
+        return int(val.total_seconds())
+    if hasattr(val, "item"):  # numpy scalar → python int (nanoseconds)
+        return int(val.item()) // 1_000_000_000
+    return int(val) // 1_000_000_000
+
+
+def set_eligible_status(eligible_groups: list[pd.DataFrame]) -> None:
+    with duckdb.connect(DB_PATH) as con:
+        for group in eligible_groups:
+            connection_id = group["ConnectionID"].iloc[0]
+            delay_raw = (
+                group["DelayTime"].iloc[0] if "DelayTime" in group.columns else None
+            )
+            delay_seconds = to_seconds(delay_raw)
+
+            con.execute(
+                f"UPDATE {SOURCE_TABLE} "
+                f"SET IsDelayEligible = 1, DelayTime = ? "
+                f"WHERE ConnectionID = ?",
+                [delay_seconds, connection_id],
+            )
+
+            # FIX 2: match DB casing — LayOverTime1..4, not LAYOVERTIME1
+            layover_cols = [c for c in group.columns if c.startswith("LayOverTime")]
+            for col in layover_cols:
+                val = group[col].iloc[0]
+                seconds = to_seconds(val)
+                con.execute(
+                    f'UPDATE {SOURCE_TABLE} SET "{col}" = ? WHERE ConnectionID = ?',
+                    [seconds, connection_id],
+                )
 
 
 # ==================================================
 # MAIN
 # ==================================================
-
-
 def main() -> None:
     single_list, multi_list = load_groups()
 
@@ -165,6 +205,10 @@ def main() -> None:
     logger.info("Single groups: %d", len(single_list))
     logger.info("Multi groups:  %d", len(multi_list))
     logger.info("Eligible:      %d", len(eligible))
+
+    if eligible:
+        set_eligible_status(eligible)  # FIX: was never called
+
     print(eligible)
 
 

@@ -11,11 +11,10 @@ DATABASE_DIR = Path.home() / "my_database"
 DATABASE_NAME = "my_db.duckdb"
 DB_PATH = DATABASE_DIR / DATABASE_NAME
 
-SOURCE_TABLE = "TRIPJACK_DELAYED_API"
+SOURCE_TABLE = "BLUESTAR_DELAYED_API"
 
 LOG_PATH = (
-    Path.home()
-    / "/home/kayhan/Desktop/Gelen_Datalar/TRIPJACK/FILTER-3(API)/DELAYED/logApi.txt"
+    Path.home() / "/home/kayhan/Desktop/Gelen_Datalar/BLUESTAR/FILTER-3(API)/logApi.txt"
 )
 
 logging.basicConfig(level=logging.INFO)

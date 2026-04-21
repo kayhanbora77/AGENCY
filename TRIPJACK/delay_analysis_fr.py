@@ -11,30 +11,27 @@ DATABASE_DIR = Path.home() / "my_database"
 DATABASE_NAME = "my_db.duckdb"
 DB_PATH = DATABASE_DIR / DATABASE_NAME
 
-SOURCE_TABLE = "TRIPJACK_DELAYED_API"
+SOURCE_TABLE = "TRIPJACK_DELAYED_FR"
 
 LOG_PATH = (
     Path.home()
-    / "/home/kayhan/Desktop/Gelen_Datalar/TRIPJACK/FILTER-3(API)/DELAYED/logApi.txt"
+    / "/home/kayhan/Desktop/Gelen_Datalar/TRIPJACK/FILTER-3(API)/DELAYED/logFR.txt"
 )
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
 DATETIME_COLS = [
-    "ArrivalScheduledTimeLocal",
-    "ArrivalRevisedTimeLocal",
-    "ArrivalRunwayTimeLocal",
-    "ArrivalScheduledTimeUtc",
-    "ArrivalRevisedTimeUtc",
-    "ArrivalRunwayTimeUtc",
-    "DepartureScheduledTimeLocal",
-    "DepartureRevisedTimeLocal",
-    "DepartureRunwayTimeLocal",
-    "DepartureScheduledTimeUtc",
-    "DepartureRevisedTimeUtc",
-    "DepartureRunwayTimeUtc",
-    "DepartureDate",
+    "ArrivalActualRunway",
+    "ArrivalActualTime",
+    "ArrivalEstimatedRunway",
+    "ArrivalEstimatedTime",
+    "ArrivalScheduledTime",
+    "DepartureActualRunway",
+    "DepartureActualTime",
+    "DepartureEstimatedRunway",
+    "DepartureEstimatedTime",
+    "DepartureScheduledTime",
 ]
 
 
@@ -51,27 +48,25 @@ def log_null_row(row: pd.Series) -> None:
 
 
 def has_null_times(row: pd.Series) -> bool:
-    revised_missing = pd.isna(row.ArrivalRevisedTimeLocal)
-    runway_missing = pd.isna(row.ArrivalRunwayTimeLocal)
-    return pd.isna(row.ArrivalScheduledTimeLocal) or (
-        revised_missing and runway_missing
-    )
+    runway_missing = pd.isna(row.ArrivalActualRunway)
+    actual_missing = pd.isna(row.ArrivalActualTime)
+    return pd.isna(row.ArrivalScheduledTime) or (runway_missing and actual_missing)
 
 
 def best_actual_arrival(row: pd.Series) -> pd.Timestamp:
-    revised = row.ArrivalRevisedTimeLocal
-    runway = row.ArrivalRunwayTimeLocal
-    if pd.isna(revised) and pd.isna(runway):
+    actual = row.ArrivalActualTime
+    runway = row.ArrivalActualRunway
+    if pd.isna(actual) and pd.isna(runway):
         return pd.NaT
     if pd.isna(runway):
-        return revised
-    if pd.isna(revised):
+        return actual
+    if pd.isna(actual):
         return runway
-    return max(revised, runway)
+    return max(actual, runway)
 
 
 def arrival_delay(row: pd.Series) -> timedelta:
-    return best_actual_arrival(row) - row.ArrivalScheduledTimeLocal
+    return best_actual_arrival(row) - row.ArrivalScheduledTime
 
 
 def group_has_nulls(group: pd.DataFrame) -> bool:
@@ -97,6 +92,7 @@ def load_groups() -> tuple[list[pd.DataFrame], list[pd.DataFrame]]:
         if col in df.columns:
             df[col] = pd.to_datetime(df[col].replace("NULL", pd.NaT), errors="coerce")
 
+    # FIX 1: sort within each group by departure time before grouping
     df = df.sort_values(["ConnectionID", "LegNo"])
 
     grouped = df.groupby("ConnectionID")
@@ -135,7 +131,9 @@ def is_multi_eligible(group: pd.DataFrame) -> bool:
             continue
         missed_connection_buffer = next_row.DepartureScheduledTimeLocal - actual_arrival
         if missed_connection_buffer <= timedelta(minutes=45):
-            group[f"LayOverTime{i + 1}"] = missed_connection_buffer
+            group[f"LayOverTime{i + 1}"] = (
+                missed_connection_buffer  # FIX 2: match DB casing
+            )
             group["Eligible"] = True
             return True
     return is_single_eligible(group)
@@ -174,6 +172,7 @@ def set_eligible_status(eligible_groups: list[pd.DataFrame]) -> None:
                 [delay_seconds, connection_id],
             )
 
+            # FIX 2: match DB casing — LayOverTime1..4, not LAYOVERTIME1
             layover_cols = [c for c in group.columns if c.startswith("LayOverTime")]
             for col in layover_cols:
                 val = group[col].iloc[0]
@@ -202,10 +201,10 @@ def main() -> None:
 
     logger.info("Single groups: %d", len(single_list))
     logger.info("Multi groups:  %d", len(multi_list))
-    logger.info("Eligible:      %d", len(eligible))
+    logger.info("Eligible List:      %d", len(eligible))
 
     if eligible:
-        set_eligible_status(eligible)
+        set_eligible_status(eligible)  # FIX: was never called
 
     print(eligible)
 

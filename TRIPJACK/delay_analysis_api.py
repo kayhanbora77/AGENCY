@@ -11,9 +11,12 @@ DATABASE_DIR = Path.home() / "my_database"
 DATABASE_NAME = "my_db.duckdb"
 DB_PATH = DATABASE_DIR / DATABASE_NAME
 
-SOURCE_TABLE = "TRIPJACK_DELAYED"
+SOURCE_TABLE = "TRIPJACK_DELAYED_API"
 
-LOG_PATH = Path.home() / "Desktop/Gelen_Datalar/API/TRIPJACK/TRIPJACK_DELAYED/log.txt"
+LOG_PATH = (
+    Path.home()
+    / "/home/kayhan/Desktop/Gelen_Datalar/TRIPJACK/FILTER-3(API)/DELAYED/log.txt"
+)
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
@@ -109,7 +112,6 @@ def load_groups() -> tuple[list[pd.DataFrame], list[pd.DataFrame]]:
             single_list.append(group.copy())
         else:
             multi_list.append(group.copy())
-
     return single_list, multi_list
 
 

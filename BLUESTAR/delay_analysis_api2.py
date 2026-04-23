@@ -133,6 +133,8 @@ def is_single_eligible(group: pd.DataFrame) -> bool:
 
 
 def is_multi_eligible(group: pd.DataFrame) -> bool:
+    group["DelayTime"] = pd.NA
+    group["DelayRowId"] = pd.NA
     for i in range(len(group) - 1):
         row = group.iloc[i]
         next_row = group.iloc[i + 1]
@@ -145,13 +147,14 @@ def is_multi_eligible(group: pd.DataFrame) -> bool:
             seconds = to_seconds(missed_connection_buffer)
             if col_name not in group.columns:
                 group[col_name] = pd.NA
-            group.loc[group.index[i], col_name] = seconds
-            if "DelayTime" not in group.columns:
-                group["DelayTime"] = pd.NA
-            if "DelayRowId" not in group.columns:
-                group["DelayRowId"] = pd.NA
-            group.loc[group.index[i], "DelayTime"] = seconds
-            group.loc[group.index[i], "DelayRowId"] = str(
+            # group.loc[group.index[i], col_name] = seconds
+            # if "DelayTime" not in group.columns:
+            #     group["DelayTime"] = pd.NA
+            # if "DelayRowId" not in group.columns:
+            #     group["DelayRowId"] = pd.NA
+            # group.loc[group.index[i], "DelayTime"] = seconds
+            group.loc[group.index[i], f"LayOverTime{i + 1}"] = seconds
+            group.loc[group.index[i], f"LayOverTime{i + 1}RowId"] = str(
                 row["Id"]
             )  # ✅ store Id of missed connection row
             group["Eligible"] = True
@@ -190,14 +193,18 @@ def set_eligible_status(eligible_groups: list[pd.DataFrame]) -> None:
                     f"WHERE Id = ?",
                     [delay_seconds, row_id],
                 )
-
-            layover_cols = [c for c in group.columns if c.startswith("LayOverTime")]
+            # ✅ update all layover columns
+            layover_cols = [
+                c
+                for c in group.columns
+                if c.startswith("LayOverTime") and not c.endswith("RowId")
+            ]
             for col in layover_cols:
                 for idx in group.index:
                     val = group.loc[idx, col]
                     if pd.isna(val):
                         continue
-                    row_id = str(group.loc[idx, "Id"])  # ✅ exact row Id
+                    row_id = str(group.loc[idx, f"{col}RowId"])  # ✅ exact row Id
                     con.execute(
                         f'UPDATE {SOURCE_TABLE} SET "{col}" = ? WHERE Id = ?',
                         [int(val), row_id],

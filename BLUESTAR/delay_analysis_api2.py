@@ -10,12 +10,14 @@ import logging
 DATABASE_DIR = Path.home() / "my_database"
 DATABASE_NAME = "my_db.duckdb"
 DB_PATH = DATABASE_DIR / DATABASE_NAME
+MIN_DELAY_MINUTES = 165
+MIN_LAYOVER_MINUTES = 45
 
 SOURCE_TABLE = "BLUESTAR_DELAYED_API"
 
 LOG_PATH = (
     Path.home()
-    / "/home/kayhan/Desktop/Gelen_Datalar/TRIPJACK/FILTER-3(API)/DELAYED/logApi.txt"
+    / "/home/kayhan/Desktop/Gelen_Datalar/BLUESTAR/FILTER-3(API)/DELAY/logApi.txt"
 )
 
 logging.basicConfig(level=logging.INFO)
@@ -126,7 +128,7 @@ def is_single_eligible(group: pd.DataFrame) -> bool:
     group.loc[group.index[-1], "DelayRowId"] = str(
         last_row["Id"]
     )  # ✅ store Id of delayed row
-    group["Eligible"] = delay >= timedelta(minutes=165)
+    group["Eligible"] = delay >= timedelta(minutes=MIN_DELAY_MINUTES)
     return bool(group["Eligible"].iloc[-1])
 
 
@@ -138,7 +140,7 @@ def is_multi_eligible(group: pd.DataFrame) -> bool:
         if pd.isna(actual_arrival):
             continue
         missed_connection_buffer = next_row.DepartureScheduledTimeLocal - actual_arrival
-        if missed_connection_buffer <= timedelta(minutes=45):
+        if missed_connection_buffer <= timedelta(minutes=MIN_LAYOVER_MINUTES):
             col_name = f"LayOverTime{i + 1}"
             seconds = to_seconds(missed_connection_buffer)
             if col_name not in group.columns:
@@ -177,8 +179,6 @@ def to_seconds(val) -> int | None:
 def set_eligible_status(eligible_groups: list[pd.DataFrame]) -> None:
     with duckdb.connect(DB_PATH) as con:
         for group in eligible_groups:
-            connection_id = str(group["ConnectionID"].iloc[0])
-
             # ✅ read DelayRowId set by eligibility functions
             delay_rows = group[group["DelayRowId"].notna()]
             if not delay_rows.empty:

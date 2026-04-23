@@ -205,8 +205,9 @@ def set_eligible_status(eligible_groups: list[pd.DataFrame]) -> None:
                     if pd.isna(val):
                         continue
                     row_id = str(group.loc[idx, f"{col}RowId"])  # ✅ exact row Id
+                    print("UPDATE", col, val, row_id)
                     con.execute(
-                        f'UPDATE {SOURCE_TABLE} SET "{col}" = ? WHERE Id = ?',
+                        f'UPDATE {SOURCE_TABLE} SET IsDelayEligible = 1,"{col}" = ? WHERE Id = ?',
                         [int(val), row_id],
                     )
 

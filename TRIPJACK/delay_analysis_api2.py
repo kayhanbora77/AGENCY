@@ -118,12 +118,15 @@ def load_groups() -> tuple[list[pd.DataFrame], list[pd.DataFrame]]:
 # ELIGIBILITY CHECKS
 # ==================================================
 def is_single_eligible(group: pd.DataFrame) -> bool:
-    delay = pd.Timedelta(
-        arrival_delay(group.iloc[-1])
-    )  # ensure Timedelta, not numpy int
-    group["DelayTime"] = delay
+    last_row = group.iloc[-1]
+    delay = pd.Timedelta(arrival_delay(last_row))
+    group["DelayTime"] = pd.NA
+    group["DelayRowId"] = pd.NA
+    group.loc[group.index[-1], "DelayTime"] = to_seconds(delay)
+    group.loc[group.index[-1], "DelayRowId"] = str(
+        last_row["Id"]
+    )  # ✅ store Id of delayed row
     group["Eligible"] = delay >= timedelta(minutes=165)
-    group["LegNo"] = group["LegNo"].iloc[-1]
     return bool(group["Eligible"].iloc[-1])
 
 
@@ -136,8 +139,19 @@ def is_multi_eligible(group: pd.DataFrame) -> bool:
             continue
         missed_connection_buffer = next_row.DepartureScheduledTimeLocal - actual_arrival
         if missed_connection_buffer <= timedelta(minutes=45):
-            group[f"LayOverTime{i + 1}"] = missed_connection_buffer
-            group["LegNo"] = row.LegNo
+            col_name = f"LayOverTime{i + 1}"
+            seconds = to_seconds(missed_connection_buffer)
+            if col_name not in group.columns:
+                group[col_name] = pd.NA
+            group.loc[group.index[i], col_name] = seconds
+            if "DelayTime" not in group.columns:
+                group["DelayTime"] = pd.NA
+            if "DelayRowId" not in group.columns:
+                group["DelayRowId"] = pd.NA
+            group.loc[group.index[i], "DelayTime"] = seconds
+            group.loc[group.index[i], "DelayRowId"] = str(
+                row["Id"]
+            )  # ✅ store Id of missed connection row
             group["Eligible"] = True
             return True
     return is_single_eligible(group)
@@ -163,28 +177,31 @@ def to_seconds(val) -> int | None:
 def set_eligible_status(eligible_groups: list[pd.DataFrame]) -> None:
     with duckdb.connect(DB_PATH) as con:
         for group in eligible_groups:
-            connection_id = group["ConnectionID"].iloc[0]
-            delay_raw = (
-                group["DelayTime"].iloc[0] if "DelayTime" in group.columns else None
-            )
-            delay_seconds = to_seconds(delay_raw)
+            connection_id = str(group["ConnectionID"].iloc[0])
 
-            con.execute(
-                f"UPDATE {SOURCE_TABLE} "
-                f"SET IsDelayEligible = 1, DelayTime = ? "
-                f"WHERE ConnectionID = ?",
-                [delay_seconds, connection_id],
-            )
+            # ✅ read DelayRowId set by eligibility functions
+            delay_rows = group[group["DelayRowId"].notna()]
+            if not delay_rows.empty:
+                delay_seconds = int(delay_rows["DelayTime"].iloc[0])
+                row_id = str(delay_rows["DelayRowId"].iloc[0])
+                con.execute(
+                    f"UPDATE {SOURCE_TABLE} "
+                    f"SET IsDelayEligible = 1, DelayTime = ? "
+                    f"WHERE Id = ?",
+                    [delay_seconds, row_id],
+                )
 
             layover_cols = [c for c in group.columns if c.startswith("LayOverTime")]
             for col in layover_cols:
-                val = group[col].iloc[0]
-                seconds = to_seconds(val)
-                leg_no = group["LegNo"].iloc[0]
-                con.execute(
-                    f'UPDATE {SOURCE_TABLE} SET "{col}" = ? WHERE ConnectionID = ? and LegNo = ?',
-                    [seconds, connection_id, leg_no],
-                )
+                for idx in group.index:
+                    val = group.loc[idx, col]
+                    if pd.isna(val):
+                        continue
+                    row_id = str(group.loc[idx, "Id"])  # ✅ exact row Id
+                    con.execute(
+                        f'UPDATE {SOURCE_TABLE} SET "{col}" = ? WHERE Id = ?',
+                        [int(val), row_id],
+                    )
 
 
 # ==================================================

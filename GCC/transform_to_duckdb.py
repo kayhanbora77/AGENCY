@@ -6,7 +6,7 @@ from datetime import datetime
 from pathlib import Path
 
 INPUT_FILE = "/home/kayhan/Desktop/Gelen_Datalar/NEW_DATA_MURAT/GCC/GCC 2025 (C2R).xlsx"
-DATABASE_DIR = Path.home() / "my_database"
+DATABASE_DIR = Path(r"C:\DuckDB")
 DATABASE_NAME = "my_db.duckdb"
 DB_PATH = DATABASE_DIR / DATABASE_NAME
 

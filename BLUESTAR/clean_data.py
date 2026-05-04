@@ -8,9 +8,15 @@ import re
 # ==================================================
 # CONFIG
 # ==================================================
-DATABASE_DIR = Path.home() / "my_database"
+# DATABASE_DIR = Path(r"C:\DuckDB")
+# DATABASE_NAME = "my_db.duckdb"
+# DB_PATH = DATABASE_DIR / DATABASE_NAME
+
+
+DATABASE_DIR = Path(r"C:\DuckDB")
 DATABASE_NAME = "my_db.duckdb"
 DB_PATH = DATABASE_DIR / DATABASE_NAME
+
 
 SOURCE_TABLE = "BLUESTAR"
 TARGET_TABLE = "BLUESTAR_TARGET"

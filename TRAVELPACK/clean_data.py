@@ -7,7 +7,7 @@ from pathlib import Path
 # ==================================================
 # CONFIG
 # ==================================================
-DATABASE_DIR = Path.home() / "my_database"
+DATABASE_DIR = Path(r"C:\DuckDB")
 DATABASE_NAME = "my_db.duckdb"
 DB_PATH = DATABASE_DIR / DATABASE_NAME
 

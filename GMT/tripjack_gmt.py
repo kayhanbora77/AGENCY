@@ -8,7 +8,7 @@ from pathlib import Path
 # CONFIG
 # ==================================================
 TABLE_NAME = "AGENCY_NOTFOUND_GMT"
-DATABASE_DIR = Path.home() / "my_database"
+DATABASE_DIR = Path(r"C:\DuckDB")
 DATABASE_NAME = "my_db.duckdb"
 DB_PATH = DATABASE_DIR / DATABASE_NAME
 CHUNK_SIZE = 100_000

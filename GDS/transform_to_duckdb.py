@@ -5,7 +5,7 @@ from pathlib import Path
 
 # ── Config ────────────────────────────────────────────────────────────────────
 INPUT_FILE = "/home/kayhan/Desktop/Gelen_Datalar/NEW_DATA_MURAT/GDS/Last6MonthsGDS.xlsx"
-DATABASE_DIR = Path.home() / "my_database"
+DATABASE_DIR = Path(r"C:\DuckDB")
 DATABASE_NAME = "my_db.duckdb"
 DB_PATH = DATABASE_DIR / DATABASE_NAME
 
